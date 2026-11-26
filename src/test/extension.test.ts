@@ -132,6 +132,27 @@ suite('webview message handling', () => {
     assert.deepStrictEqual(reply.commits.map((c) => c.refs), [['HEAD -> refs/heads/integration-branch'], []]);
   });
 
+  test('loadCommits includes commits reachable only from a remote-tracking branch or only from a tag', async () => {
+    const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd: repoDir() }).toString().trim();
+    const tree = git('rev-parse', 'HEAD^{tree}');
+    const remoteOnly = git('commit-tree', tree, '-p', 'HEAD', '-m', 'remote only');
+    const tagOnly = git('commit-tree', tree, '-p', 'HEAD', '-m', 'tag only');
+    git('update-ref', 'refs/remotes/origin/integration-remote', remoteOnly);
+    git('tag', 'integration-tag-only', tagOnly);
+    try {
+      const replies: unknown[] = [];
+      await handleMessage({ type: 'loadCommits', skip: 0, limit: 1000 }, (r) => replies.push(r));
+      const { commits } = replies[0] as { commits: Commit[] };
+      const refsOf = (hash: string) => commits.find((c) => c.hash === hash)?.refs;
+      assert.deepStrictEqual(refsOf(remoteOnly), ['refs/remotes/origin/integration-remote']);
+      assert.deepStrictEqual(refsOf(tagOnly), ['tag: refs/tags/integration-tag-only']);
+      assert.strictEqual(commits.length, 4);
+    } finally {
+      git('update-ref', '-d', 'refs/remotes/origin/integration-remote');
+      git('tag', '-d', 'integration-tag-only');
+    }
+  });
+
   test('loadCommits with skip/limit replies with that page of the real log', async () => {
     const replies: unknown[] = [];
     await handleMessage({ type: 'loadCommits', skip: 1, limit: 1 }, (r) => replies.push(r));

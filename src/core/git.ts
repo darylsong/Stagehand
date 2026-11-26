@@ -68,11 +68,11 @@ async function classify(cwd: string, err: unknown): Promise<GitError> {
   return new GitError('git', e.stderr?.trim() || e.message || String(err));
 }
 
-/** A page of `git log HEAD --branches` in git's default order (newest commit date first). Throws GitError. */
+/** A page of `git log HEAD --branches --remotes --tags --topo-order` (every ref; a branch's commits stay together, children before parents). Throws GitError. */
 export async function listCommits(cwd: string, { skip = 0, limit = 1000 } = {}): Promise<Commit[]> {
   try {
     const out = await git(cwd, [
-      'log', '-z', `--format=${LOG_FIELDS.join('%x00')}`, `--skip=${skip}`, `--max-count=${limit}`, '--decorate=full', 'HEAD', '--branches', '--',
+      'log', '-z', `--format=${LOG_FIELDS.join('%x00')}`, `--skip=${skip}`, `--max-count=${limit}`, '--decorate=full', '--topo-order', 'HEAD', '--branches', '--remotes', '--tags', '--',
     ]);
     return parseLog(out);
   } catch (err) {

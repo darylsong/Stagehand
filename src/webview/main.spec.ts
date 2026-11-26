@@ -780,3 +780,62 @@ test('files sit above the details; splitters resize the pane and the files, and 
   expect((await box('.commits')).width).toBeGreaterThanOrEqual(140);
   expect((await box('.details .info')).height).toBeGreaterThanOrEqual(35);
 });
+
+test('the graph: each row draws its lines and node as inline SVG, colours follow lines, HEAD is a ring; paging and refresh keep it consistent', async ({ page: p }) => {
+  await p.setViewportSize({ width: 1000, height: 300 });
+  await p.goto(page);
+  const at = (i: number, hash: string, parents: string[], subject: string, refs: string[] = []): Commit =>
+    ({ ...commits[i]!, hash: hash.repeat(40), parents: parents.map((h) => h.repeat(40)), subject, refs });
+  const history = [
+    at(0, 'm', ['b', 'f'], 'Merge feature', ['HEAD -> refs/heads/main']),
+    at(1, 'b', ['a'], 'On main'),
+    at(2, 'f', ['a'], 'On feature', ['refs/heads/feature']),
+    at(3, 'a', [], 'Root'),
+  ];
+  const [blue, orange] = ['#4c9be8', '#e8a33d']; // PALETTE[0], PALETTE[1]
+  // Lane x centres 6 and 18 (12px lanes); row height 22, node centre at 11.
+  const expected = [
+    [['M6 11L6 22', blue], ['M6 11L18 22', orange]],
+    [['M6 0L6 11', blue], ['M18 0L18 22', orange], ['M6 11L6 22', blue]],
+    [['M6 0L6 22', blue], ['M18 0L18 11', orange], ['M18 11L18 22', orange]],
+    [['M6 0L6 11', blue], ['M18 0L6 11', orange]],
+  ];
+  const drawn = () => p.locator('.row').evaluateAll((rows) => rows.map((r) =>
+    [...r.querySelectorAll('.graph path')].map((e) => [e.getAttribute('d'), e.getAttribute('stroke')])));
+  const nodes = () => p.locator('.row .graph circle').evaluateAll((els) => els.map((e) =>
+    ({ cx: e.getAttribute('cx'), head: e.classList.contains('node-head'), fill: e.getAttribute('fill'), stroke: e.getAttribute('stroke'), paint: getComputedStyle(e).fill })));
+
+  // Two pages: the feature line crosses the boundary in the same lane and colour.
+  await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, limit: 2, commits: c }, '*'), history.slice(0, 2));
+  await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 2, limit: 2, commits: c }, '*'), history.slice(2));
+  await expect(p.locator('.row')).toHaveCount(4);
+  expect(await drawn()).toEqual(expected);
+  const n = await nodes();
+  expect(n.map((x) => [x.cx, x.head])).toEqual([['6', true], ['6', false], ['18', false], ['6', false]]);
+  // HEAD: a ring (lane-coloured stroke, background fill); others: filled dots in their lane's colour.
+  expect(n[0]).toMatchObject({ stroke: blue, fill: null, paint: 'rgb(255, 255, 255)' });
+  expect(n[2]).toMatchObject({ fill: orange });
+  // The graph comes first in the row.
+  expect(await p.locator('.row').first().evaluate((r) => r.firstElementChild!.getAttribute('class'))).toBe('graph');
+
+  // A refresh with a new commit on top recomputes the graph: the old rows draw exactly as before.
+  const top = at(4, 'c', ['m'], 'New on main', ['HEAD -> refs/heads/main']);
+  await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, limit: 1000, commits: c }, '*'),
+    [top, { ...history[0]!, refs: [] }, ...history.slice(1)]);
+  await expect(p.locator('.row')).toHaveCount(5);
+  expect((await drawn()).slice(1)).toEqual([[['M6 0L6 11', blue], ...expected[0]!], ...expected.slice(1)]);
+  expect((await nodes()).map((x) => x.head)).toEqual([true, false, false, false, false]);
+
+  // A wider fixture for the screenshot: crossing lines and an octopus merge.
+  const wide = [
+    at(0, '1', ['5', '2', '3'], 'Octopus merge', ['HEAD -> refs/heads/main']),
+    at(1, '4', ['2'], 'Tip of topic', ['refs/remotes/origin/topic']),
+    at(2, '2', ['6', '5'], 'Merge main into topic'),
+    at(3, '3', ['6'], 'Fix on hotfix', ['tag: refs/tags/v2']),
+    at(4, '5', ['6'], 'On main'),
+    at(5, '6', [], 'Root'),
+  ];
+  await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, limit: 1000, commits: c }, '*'), wide);
+  await expect(p.locator('.row').first().locator('.subject')).toHaveText('Octopus merge');
+  await p.screenshot({ path: 'test-results/screenshots/017-graph.png' });
+});

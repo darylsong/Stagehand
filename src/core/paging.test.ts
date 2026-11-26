@@ -6,7 +6,7 @@ import { createTestRepo, type TestRepo } from './testRepo';
 let repo: TestRepo;
 afterEach(() => repo?.dispose());
 
-it('three pages of 1000 with increasing skip return all 2,500 commits from two branch tips, in order, no repeats', async () => {
+it('three pages of 1000 with increasing skip return all 2,500 commits from two branch tips, in topo order, no repeats', async () => {
   repo = await createTestRepo();
   // fast-import: 2,500 commits in one process. main and feature interleave by date so pages mix both tips.
   let script = '';
@@ -24,6 +24,5 @@ it('three pages of 1000 with increasing skip return all 2,500 commits from two b
   expect(pages.map((p) => p.length)).toEqual([1000, 1000, 500]);
   const hashes = pages.flat().map((c) => c.hash);
   expect(new Set(hashes).size).toBe(2500);
-  expect(hashes).toEqual((await repo.git('log', '--format=%H', 'HEAD', '--branches')).trim().split('\n'));
-  expect(pages[0]!.slice(0, 2).map((c) => c.subject)).toEqual(['c2500', 'c2499']);
+  expect(hashes).toEqual((await repo.git('log', '--format=%H', '--topo-order', 'HEAD', '--branches', '--remotes', '--tags')).trim().split('\n'));
 });

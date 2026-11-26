@@ -37,6 +37,9 @@
     .hash { width: 8ch; font-family: var(--vscode-editor-font-family, monospace); }
     @container (max-width: 620px) { .author { display: none; } }
     @container (max-width: 460px) { .date { display: none; } }
+    .graph { flex: none; margin-right: -4px; }
+    .graph path { fill: none; stroke-width: 1.5; }
+    .graph .node-head { fill: var(--vscode-panel-background, #fff); stroke-width: 2; }
     .row.merge .subject { color: var(--vscode-descriptionForeground, #717171); }
     .refs { flex: 0 0 auto; max-width: 50%; min-width: 0; display: flex; gap: 4px; align-items: center; }
     .ref-icons { flex: none; display: flex; }

@@ -1,5 +1,6 @@
 import type { ChangedFile, Commit, CommitDetails, ErrorKind } from '../core/git';
 import { fileTree, type TreeNode } from '../core/fileTree';
+import { graph, type GraphRow, type Lanes } from '../core/graph';
 
 export type Message =
   | { type: 'commits'; skip: number; limit?: number; commits: Commit[] }
@@ -75,12 +76,40 @@ function labels(refs: string[]): HTMLElement {
   return el;
 }
 
+/** Line colours, by lane colour index; mid-tones that read on light and dark backgrounds. */
+export const PALETTE = ['#4c9be8', '#e8a33d', '#4fb36b', '#e05d5d', '#a77de0', '#2fb5b5', '#d96fae', '#a6a63f'];
+const LANE = 12; // px per graph lane
+
+/** The row's graph cell: its lines, then the node on top (a ring for HEAD). */
+function graphCell(g: GraphRow, isHead: boolean): Element {
+  const svg = document.createElementNS(SVG, 'svg');
+  svg.setAttribute('class', 'graph');
+  svg.setAttribute('width', String(g.width * LANE));
+  svg.setAttribute('height', String(ROW_HEIGHT));
+  const x = (col: number) => col * LANE + LANE / 2;
+  for (const l of g.lines) {
+    const path = document.createElementNS(SVG, 'path');
+    path.setAttribute('d', `M${x(l.x1)} ${l.y1 * ROW_HEIGHT}L${x(l.x2)} ${l.y2 * ROW_HEIGHT}`);
+    path.setAttribute('stroke', PALETTE[l.color % PALETTE.length]!);
+    svg.append(path);
+  }
+  const node = document.createElementNS(SVG, 'circle');
+  node.setAttribute('class', isHead ? 'node node-head' : 'node');
+  for (const [k, v] of [['cx', x(g.col)], ['cy', ROW_HEIGHT / 2], ['r', isHead ? 4 : 3.5]] as const) node.setAttribute(k, String(v));
+  const color = PALETTE[g.color % PALETTE.length]!;
+  node.setAttribute(isHead ? 'stroke' : 'fill', color);
+  svg.append(node);
+  return svg;
+}
+
 export const ROW_HEIGHT = 22; // px; must match .row height in index.html
 export const PAGE = 1000;
 const OVERSCAN = 10; // rows rendered above and below the viewport
 const PREFETCH = 200; // request the next page when the viewport is this many rows from the end
 
 let commits: Commit[] = [];
+let graphRows: GraphRow[] = []; // graph(commits), row for row
+let lanes: Lanes | undefined; // the graph's state after the last loaded commit
 let selected = new Set<number>(); // indices into commits
 let anchor = -1; // where a Shift range starts
 let lead = -1; // the row Up/Down move from
@@ -122,7 +151,7 @@ function renderRows(list: HTMLElement): void {
     title.append(cell('subject', c.subject), labels(c.refs));
     const date = cell('date', formatDate(c.authorDate));
     date.title = new Date(c.authorDate).toLocaleString(undefined, { dateStyle: 'full', timeStyle: 'long' });
-    row.append(title, cell('author', c.authorName), date, cell('hash', c.hash.slice(0, 8)));
+    row.append(graphCell(graphRows[i]!, isHead), title, cell('author', c.authorName), date, cell('hash', c.hash.slice(0, 8)));
     els.push(row);
   }
   rows.replaceChildren(...els);
@@ -349,6 +378,9 @@ export function render(root: HTMLElement, msg: Message): void {
     // Next page: append if it continues the list we have; drop anything else (e.g. a page for an old list).
     if (!existing || msg.skip !== commits.length) return;
     commits = commits.concat(msg.commits);
+    const g = graph(msg.commits, lanes);
+    graphRows = graphRows.concat(g.rows);
+    lanes = g.state;
     existing.querySelector<HTMLElement>('.spacer')!.style.height = `${commits.length * ROW_HEIGHT}px`;
     renderRows(existing);
     return;
@@ -358,6 +390,7 @@ export function render(root: HTMLElement, msg: Message): void {
   const hashAt = (i: number) => commits[i]?.hash ?? '';
   const [anchorHash, leadHash] = [hashAt(anchor), hashAt(lead)];
   commits = msg.commits;
+  ({ rows: graphRows, state: lanes } = graph(commits));
   const index = new Map(commits.map((c, i) => [c.hash, i]));
   selected = new Set(before.flatMap((h) => (index.has(h) ? [index.get(h)!] : [])));
   anchor = index.get(anchorHash) ?? -1;

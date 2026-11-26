@@ -8,7 +8,7 @@ import { createTestRepo, type TestRepo } from './testRepo';
 let repo: TestRepo;
 afterEach(() => repo?.dispose());
 
-it('lists commits from HEAD and other local branches, newest first, with parents and refs', async () => {
+it('lists commits from HEAD and other local branches in topo order, with parents and refs', async () => {
   repo = await createTestRepo();
   const a = await repo.commit('A');
   await repo.git('checkout', '-q', '-b', 'feature');
@@ -21,7 +21,8 @@ it('lists commits from HEAD and other local branches, newest first, with parents
   await repo.git('checkout', '-q', 'main');
 
   const commits = await listCommits(repo.dir);
-  expect(commits.map((x) => x.hash)).toEqual([d, m, c, b, a]);
+  // Topo order: the merged branch's commit b comes right after its merge, before main's c.
+  expect(commits.map((x) => x.hash)).toEqual([d, m, b, c, a]);
   const byHash = Object.fromEntries(commits.map((x) => [x.hash, x]));
   expect(byHash[m]?.parents).toEqual([c, b]);
   expect(byHash[a]?.parents).toEqual([]);
@@ -30,7 +31,7 @@ it('lists commits from HEAD and other local branches, newest first, with parents
   expect(byHash[m]?.refs).toEqual(['HEAD -> refs/heads/main']);
   expect(byHash[a]?.authorDate).toMatch(/^2024-01-01T00:00:00/);
 
-  expect((await listCommits(repo.dir, { skip: 1, limit: 2 })).map((x) => x.hash)).toEqual([m, c]);
+  expect((await listCommits(repo.dir, { skip: 1, limit: 2 })).map((x) => x.hash)).toEqual([m, b]);
   expect((await listCommits(repo.dir, { skip: 4, limit: 10 })).map((x) => x.hash)).toEqual([a]);
 });
 
@@ -52,6 +53,23 @@ it('gives branch, tag and detached-HEAD refs on the right commits', async () => 
   await repo.git('checkout', '-q', 'feature');
   await repo.git('update-ref', 'refs/remotes/origin/feature', c);
   expect((await listCommits(repo.dir))[0]).toMatchObject({ hash: c, refs: ['HEAD -> refs/heads/feature', 'refs/remotes/origin/feature'] });
+});
+
+it('includes commits reachable only from a remote-tracking branch or a tag', async () => {
+  repo = await createTestRepo();
+  const a = await repo.commit('A');
+  const r = await repo.commit('remote only');
+  await repo.git('update-ref', 'refs/remotes/origin/gone', r);
+  await repo.git('reset', '-q', '--hard', a);
+  await repo.git('checkout', '-q', '--detach');
+  const t = await repo.commit('tag only');
+  await repo.git('tag', 'only-tag');
+  await repo.git('checkout', '-q', 'main');
+
+  const commits = await listCommits(repo.dir);
+  expect(new Set(commits.map((x) => x.hash))).toEqual(new Set([a, r, t]));
+  expect(commits.find((x) => x.hash === r)?.refs).toEqual(['refs/remotes/origin/gone']);
+  expect(commits.find((x) => x.hash === t)?.refs).toEqual(['tag: refs/tags/only-tag']);
 });
 
 describe('error kinds', () => {
