@@ -334,6 +334,49 @@ for (const state of states) {
   });
 }
 
+test('right-click on a row offers Checkout, which posts checkout(hash); double-click and multi-selection don\'t', async ({ page: p }) => {
+  await p.addInitScript(() => {
+    const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
+    w.posted = [];
+    w.acquireVsCodeApi = () => ({ postMessage: (m: unknown) => w.posted.push(m) });
+  });
+  await p.goto(page);
+  await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, commits: c }, '*'), commits);
+  const posted = () => p.evaluate(() => (window as unknown as { posted: { type: string }[] }).posted);
+  const checkouts = async () => (await posted()).filter((m) => m.type === 'checkout');
+  const rows = p.locator('.row');
+  const menu = p.locator('.menu');
+
+  // Double-click selects but never checks out.
+  await rows.nth(1).dblclick();
+  await expect(rows.nth(1)).toHaveClass(/selected/);
+  expect(await checkouts()).toEqual([]);
+
+  // Right-click an unselected row: it becomes the single selection and the menu offers Checkout.
+  await rows.nth(2).click({ button: 'right' });
+  await expect(rows.nth(2)).toHaveClass(/selected/);
+  await expect(menu.locator('.menu-item')).toHaveText(['Checkout']);
+  await p.screenshot({ path: 'test-results/screenshots/011-context-menu.png' });
+  await menu.locator('.menu-item').click();
+  await expect(menu).toHaveCount(0);
+  expect(await checkouts()).toEqual([{ type: 'checkout', hash: commits[2]!.hash }]);
+
+  // Escape and clicking elsewhere close the menu without posting.
+  await rows.nth(2).click({ button: 'right' });
+  await p.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+  await rows.nth(2).click({ button: 'right' });
+  await rows.nth(5).click();
+  await expect(menu).toHaveCount(0);
+
+  // Several selected: no Checkout.
+  await rows.nth(6).click({ modifiers: ['Shift'] });
+  await rows.nth(5).click({ button: 'right' });
+  await expect(p.locator('.row.selected')).toHaveCount(2);
+  await expect(menu).toHaveCount(0);
+  expect(await checkouts()).toHaveLength(1);
+});
+
 test('a 50k-commit history renders only the visible rows and pages in more at the bottom, one request at a time', async ({ page: p }) => {
   await p.addInitScript(() => {
     const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };

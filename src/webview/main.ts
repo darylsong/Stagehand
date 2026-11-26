@@ -119,6 +119,28 @@ function select(list: HTMLElement, i: number, mode: 'plain' | 'toggle' | 'extend
   if (hashes.length) post({ type: 'changedFiles', hash: hashes });
 }
 
+/** The row context menu: Checkout, only when exactly one commit is selected. */
+function showMenu(x: number, y: number, hash: string): void {
+  hideMenu();
+  const menu = document.createElement('div');
+  menu.className = 'menu';
+  menu.setAttribute('role', 'menu');
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  const item = document.createElement('button');
+  item.className = 'menu-item';
+  item.setAttribute('role', 'menuitem');
+  item.textContent = 'Checkout';
+  item.addEventListener('click', () => {
+    hideMenu();
+    post({ type: 'checkout', hash });
+  });
+  menu.append(item);
+  document.body.append(menu);
+  item.focus();
+}
+const hideMenu = () => document.querySelector('.menu')?.remove();
+
 const selectedHash = () => (selected.size === 1 ? commits[[...selected][0]!]?.hash : undefined);
 
 function field(label: string, value: string): HTMLElement {
@@ -225,6 +247,15 @@ export function render(root: HTMLElement, msg: Message): void {
     const row = (e.target as HTMLElement).closest<HTMLElement>('.row');
     if (row) select(list, Number(row.dataset.index), e.shiftKey ? 'extend' : e.ctrlKey || e.metaKey ? 'toggle' : 'plain');
   });
+  list.addEventListener('contextmenu', (e) => {
+    const row = (e.target as HTMLElement).closest<HTMLElement>('.row');
+    if (!row) return;
+    e.preventDefault();
+    const i = Number(row.dataset.index);
+    if (!selected.has(i)) select(list, i);
+    hideMenu();
+    if (selected.size === 1) showMenu(e.clientX, e.clientY, commits[i]!.hash);
+  });
   list.addEventListener('keydown', (e) => {
     const step = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
     if (!step) return;
@@ -245,6 +276,12 @@ export function render(root: HTMLElement, msg: Message): void {
 const app = document.getElementById('app');
 if (app) {
   window.addEventListener('message', (e: MessageEvent<Message>) => render(app, e.data));
+  window.addEventListener('mousedown', (e) => {
+    if (!(e.target as HTMLElement).closest('.menu')) hideMenu();
+  });
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') hideMenu();
+  });
   window.addEventListener('resize', () => {
     const list = app.querySelector<HTMLElement>('.commits');
     if (list) renderRows(list);

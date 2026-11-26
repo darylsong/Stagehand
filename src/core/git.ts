@@ -230,3 +230,21 @@ export async function fileAtRevision(cwd: string, rev: string, path: string): Pr
     throw err;
   }
 }
+
+/** What checking out `hash` means: the local branches whose tip it is (string[]), or the hash itself to detach at (string). */
+export async function checkoutTarget(cwd: string, hash: string): Promise<string[] | string> {
+  const branches = (await git(cwd, ['for-each-ref', `--points-at=${hex(hash)}`, '--format=%(refname:short)', 'refs/heads/']))
+    .split('\n').filter(Boolean);
+  return branches.length ? branches : hash;
+}
+
+/** Plain `git checkout` (never forced) of a branch, or of a hash with HEAD detached. Throws git's reason if it refuses. */
+export async function checkout(cwd: string, target: { branch: string } | { detach: string }): Promise<void> {
+  try {
+    if ('branch' in target) await git(cwd, ['checkout', '-q', target.branch, '--']);
+    else await git(cwd, ['checkout', '-q', '--detach', hex(target.detach), '--']);
+  } catch (err) {
+    const e = err as { stderr?: string; message?: string };
+    throw new Error(e.stderr?.trim() || e.message || String(err));
+  }
+}

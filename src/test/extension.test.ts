@@ -1,11 +1,12 @@
 import * as assert from 'node:assert';
 import * as vscode from 'vscode';
-import { mkdtempSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { ChangedFile, Commit, CommitDetails } from '../core/git';
 import { gitError } from '../core/git';
-import { handleMessage, repoDir, webviewHtml } from '../extension/extension';
+import { checkout, handleMessage, repoDir, webviewHtml } from '../extension/extension';
 
 // Workspace repo (.vscode-test.mjs): "init" adds file.txt ("old"), "modify" changes it to "new".
 const commitNamed = async (subject: string) =>
@@ -249,5 +250,73 @@ suite('webview HTML', () => {
   test('shows a message when index.html is missing', () => {
     const html = webviewHtml(mkdtempSync(join(tmpdir(), 'stagehand-empty-')), 'main.js', 'x');
     assert.match(html, /webview not built/);
+  });
+});
+
+// Runs last: moves HEAD around, then leaves the workspace repo on integration-branch again.
+suite('checkout', () => {
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: repoDir(), encoding: 'utf8' }).trim();
+  const branch = () => vscode.commands.executeCommand<string | undefined>('stagehand.showCurrentBranch');
+  suiteTeardown(() => {
+    git('checkout', '-q', 'integration-branch');
+  });
+
+  test('checking out the earlier commit detaches HEAD there; the integration-branch tip gets the branch back', async () => {
+    const [init, modify] = [await commitNamed('init'), await commitNamed('modify')];
+    assert.strictEqual(await vscode.commands.executeCommand('stagehand.history.checkout', init.hash), true);
+    assert.strictEqual(git('rev-parse', 'HEAD'), init.hash);
+    assert.strictEqual(await branch(), undefined);
+    assert.strictEqual(await vscode.commands.executeCommand('stagehand.history.checkout', modify.hash), true);
+    assert.strictEqual(await branch(), 'integration-branch');
+  });
+
+  test('a commit that is the tip of several branches asks which one; cancelling changes nothing', async () => {
+    const modify = await commitNamed('modify');
+    git('branch', 'other-branch', modify.hash);
+    try {
+      const offered: string[][] = [];
+      const ui = (answer: string | undefined) => ({ pick: async (b: string[]) => (offered.push(b), answer), error: () => assert.fail('no error') });
+      assert.strictEqual(await checkout(modify.hash, ui(undefined)), false);
+      assert.strictEqual(await branch(), 'integration-branch');
+      assert.strictEqual(await checkout(modify.hash, ui('other-branch')), true);
+      assert.strictEqual(await branch(), 'other-branch');
+      assert.deepStrictEqual(offered, [['integration-branch', 'other-branch'], ['integration-branch', 'other-branch']]);
+    } finally {
+      git('checkout', '-q', 'integration-branch');
+      git('branch', '-D', 'other-branch');
+    }
+  });
+
+  test('a refused checkout shows git\'s reason and changes nothing', async () => {
+    const [init, modify] = [await commitNamed('init'), await commitNamed('modify')];
+    const file = join(repoDir(), 'file.txt');
+    writeFileSync(file, 'dirty\n');
+    try {
+      const errors: string[] = [];
+      assert.strictEqual(await checkout(init.hash, { pick: async () => assert.fail('no pick'), error: (m) => errors.push(m) }), false);
+      assert.strictEqual(errors.length, 1);
+      assert.match(errors[0]!, /file\.txt/);
+      assert.strictEqual(git('rev-parse', 'HEAD'), modify.hash);
+      assert.strictEqual(await branch(), 'integration-branch');
+      assert.strictEqual(readFileSync(file, 'utf8'), 'dirty\n');
+    } finally {
+      git('checkout', '-q', '--', 'file.txt');
+    }
+  });
+
+  test('a checkout message runs the command and reposts the commits so the HEAD marker moves', async () => {
+    const [init, modify] = [await commitNamed('init'), await commitNamed('modify')];
+    const replies: { type: string; commits?: Commit[] }[] = [];
+    await handleMessage({ type: 'checkout', hash: init.hash }, (r) => replies.push(r as { type: string }));
+    assert.deepStrictEqual(replies.map((r) => r.type), ['commits']);
+    // Both commits share a timestamp, so match by hash rather than list order.
+    const refs = (r: { commits?: Commit[] }) => Object.fromEntries(r.commits!.map((c) => [c.hash, c.refs]));
+    assert.deepStrictEqual(refs(replies[0]!), { [init.hash]: ['HEAD'], [modify.hash]: ['integration-branch'] });
+    await handleMessage({ type: 'checkout', hash: modify.hash }, (r) => replies.push(r as { type: string }));
+    assert.deepStrictEqual(refs(replies[1]!), { [init.hash]: [], [modify.hash]: ['HEAD -> integration-branch'] });
+  });
+
+  test('a refused checkout message posts nothing', async () => {
+    await handleMessage({ type: 'checkout', hash: 'abc123' }, () => assert.fail('no reply'), async () => false);
   });
 });

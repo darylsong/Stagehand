@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import {
-  changedFiles, combinedChanges, commitDetails, currentBranch, fileAtRevision, firstParent, gitError, listCommits, type ChangedFile, type ErrorKind,
+  changedFiles, checkout as gitCheckout, checkoutTarget, combinedChanges, commitDetails, currentBranch, fileAtRevision, firstParent, gitError, listCommits, type ChangedFile, type ErrorKind,
 } from '../core/git';
 
 /** The first workspace folder's path; throws the 'no-folder' GitError when there is none. */
@@ -38,6 +38,32 @@ export async function openDiff(hash: string, file: ChangedFile, preview = true):
   await vscode.commands.executeCommand('vscode.diff', left, right, `${basename(file.path)} (${hash.slice(0, 8)})`, { preview });
 }
 
+/** UI the checkout command uses; injectable so integration tests can answer the quick pick and see the error. */
+export type CheckoutUi = {
+  pick: (branches: string[]) => Thenable<string | undefined>;
+  error: (message: string) => unknown;
+};
+const checkoutUi: CheckoutUi = {
+  pick: (branches) => vscode.window.showQuickPick(branches, { placeHolder: 'Several branches point at this commit; check out which?' }),
+  error: (message) => vscode.window.showErrorMessage(`Checkout failed: ${message}`),
+};
+
+/** Checks out the commit's branch (picking if several), or the commit itself detached. Returns whether HEAD moved. */
+export async function checkout(hash: string, ui: CheckoutUi = checkoutUi): Promise<boolean> {
+  const dir = repoDir();
+  const target = await checkoutTarget(dir, hash);
+  const branch = typeof target === 'string' ? undefined : target.length > 1 ? await ui.pick(target) : target[0];
+  if (typeof target !== 'string' && !branch) return false; // quick pick cancelled
+  try {
+    await gitCheckout(dir, branch ? { branch } : { detach: hash });
+    return true;
+  } catch (err) {
+    // ponytail: refusal just reports git's reason; 012 adds Stash & Checkout.
+    ui.error((err as Error).message);
+    return false;
+  }
+}
+
 /** Handles one message from the webview; `post` sends the reply. */
 export async function handleMessage(
   msg: WebviewMessage,
@@ -57,6 +83,11 @@ export async function handleMessage(
       post({ type: 'changedFiles', hash: msg.hash, ...(Array.isArray(result) ? { files: result } : (result as object)) });
     } else if (msg.type === 'openDiff') {
       await run('stagehand.history.openDiff', msg.hash, msg.file, msg.preview);
+    } else if (msg.type === 'checkout') {
+      // Reload the first page so the HEAD marker moves.
+      if (await run('stagehand.history.checkout', msg.hash)) {
+        post({ type: 'commits', skip: 0, commits: (await run('stagehand.history.loadCommits', { skip: 0, limit: 1000 })) ?? [] });
+      }
     } else if (msg.type === 'copy') {
       await vscode.env.clipboard.writeText(String(msg.text ?? ''));
     }
@@ -90,6 +121,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('stagehand.history.changedFiles', (hash: string | string[]) =>
       Array.isArray(hash) ? combinedChanges(repoDir(), hash) : changedFiles(repoDir(), hash)),
     vscode.commands.registerCommand('stagehand.history.openDiff', openDiff),
+    vscode.commands.registerCommand('stagehand.history.checkout', (hash: string) => checkout(hash)),
     vscode.workspace.registerTextDocumentContentProvider('stagehand', {
       provideTextDocumentContent: (uri) => (uri.query ? fileAtRevision(repoDir(), uri.query, uri.path.slice(1)) : ''),
     }),

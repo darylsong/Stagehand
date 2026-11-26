@@ -47,6 +47,10 @@
       {
         "command": "stagehand.history.openDiff",
         "title": "Stagehand: Open Diff"
+      },
+      {
+        "command": "stagehand.history.checkout",
+        "title": "Stagehand: Checkout Commit"
       }
     ]
   },
