@@ -39,7 +39,7 @@
     ]
   },
   "scripts": {
-    "compile": "tsc -p .",
+    "compile": "tsc -p . && npm run build:webview",
     "build:webview": "esbuild src/webview/main.ts --bundle --format=iife --outdir=out/webview && cp src/webview/index.html out/webview/",
     "lint": "eslint src",
     "typecheck": "tsc -p . --noEmit && tsc -p src/webview --noEmit",
