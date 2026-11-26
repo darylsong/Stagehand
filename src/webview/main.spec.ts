@@ -312,9 +312,11 @@ test('the selected commit lists its changed files with status letters, rename ar
   await p.evaluate(([h, f]) => window.postMessage({ type: 'changedFiles', hash: h, files: f }, '*'), [commits[2]!.hash, files] as const);
   const rows = p.locator('.details .file');
   await expect(rows).toHaveCount(5);
-  await expect(rows.locator('.status')).toHaveText(['A', 'M', 'D', 'R', 'A']);
-  await expect(rows.locator('.path')).toHaveText(['src/added.ts', 'README.md', 'old/removed.txt', 'src/before.ts → src/after.ts', 'assets/logo.png']);
-  await expect(rows.nth(4).locator('.binary')).toHaveText('Binary file changed');
+  // Tree order: folders (assets, old, src) first, then root files.
+  await expect(rows.locator('.status')).toHaveText(['A', 'D', 'A', 'R', 'M']);
+  await expect(rows.locator('.path')).toHaveText(['logo.png', 'removed.txt', 'added.ts', 'before.ts → after.ts', 'README.md']);
+  await expect(rows.nth(3)).toHaveAttribute('title', 'src/before.ts → src/after.ts');
+  await expect(rows.nth(0).locator('.binary')).toHaveText('Binary file changed');
   await expect(p.locator('.details .binary')).toHaveCount(1);
   await p.screenshot({ path: 'test-results/screenshots/006-files.png' });
 });
@@ -336,8 +338,9 @@ test('click opens a preview diff, double click pins it, Enter opens the focused 
     { status: 'A', path: 'assets/logo.png', binary: true },
   ];
   await p.evaluate(([h, f]) => window.postMessage({ type: 'changedFiles', hash: h, files: f }, '*'), [hash, files] as const);
-  const rows = p.locator('.details .file');
-  await expect(rows).toHaveCount(3);
+  const all = p.locator('.details .file');
+  await expect(all).toHaveCount(3);
+  const rows = { nth: (i: number) => all.filter({ hasText: ['README.md', 'after.ts', 'logo.png'][i]! }) }; // files[i]'s row
   const clear = () => p.evaluate(() => { (window as unknown as { posted: unknown[] }).posted = []; });
   const posted = () => p.evaluate(() => (window as unknown as { posted: unknown[] }).posted);
 
@@ -411,10 +414,10 @@ test('Ctrl-click toggles, Shift-click selects a range, Shift+Down extends; the p
   await p.evaluate(([hs, f]) => window.postMessage({ type: 'changedFiles', hash: hs, files: f }, '*'), [h(1, 2, 3, 4), files] as const);
   await expect(p.locator('.details .file')).toHaveCount(0); // reply for an older selection is dropped
   await p.evaluate(([hs, f]) => window.postMessage({ type: 'changedFiles', hash: hs, files: f }, '*'), [h(1, 2, 3), files] as const);
-  await expect(p.locator('.details .file .path')).toHaveText(['README.md', 'src/new.ts']);
+  await expect(p.locator('.details .file .path')).toHaveText(['new.ts', 'README.md']);
   await p.screenshot({ path: 'test-results/screenshots/009-multi-select.png' });
   await clear();
-  await p.locator('.details .file').nth(0).click();
+  await p.locator('.details .file').filter({ hasText: 'README.md' }).click();
   expect(await posted()).toEqual([{ type: 'openDiff', hash: h(1)[0], file: files[0], preview: true }]);
 
   // A plain click goes back to one commit with its details.
@@ -659,4 +662,121 @@ test('a refresh after paging reloads every loaded commit in one request', async 
   await p.locator('.commits').evaluate((el) => { el.scrollTop = el.scrollHeight; });
   await expect(p.locator('.row[data-index="1498"]')).toBeVisible();
   expect(await p.evaluate(() => (window as unknown as { posted: unknown[] }).posted)).toEqual([{ type: 'loadCommits', skip: 0, limit: 1500 }]);
+});
+
+test('changed files show as a tree: folders expanded, chains merged, counts, collapsible by click and Enter', async ({ page: p }) => {
+  await p.setViewportSize({ width: 1000, height: 500 });
+  await p.addInitScript(() => {
+    const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
+    w.posted = [];
+    w.acquireVsCodeApi = () => ({ postMessage: (m: unknown) => w.posted.push(m) });
+  });
+  await p.goto(page);
+  await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, commits: c }, '*'), commits);
+  await p.locator('.row').nth(1).click();
+  const hash = commits[1]!.hash;
+  const files: ChangedFile[] = [
+    { status: 'M', path: 'src/core/git.ts', binary: false },
+    { status: 'A', path: 'src/core/fileTree.ts', binary: false },
+    { status: 'R', oldPath: 'src/webview/old.ts', path: 'src/webview/main.ts', binary: false },
+    { status: 'A', path: 'assets/img/logo.png', binary: true },
+    { status: 'M', path: 'README.md', binary: false },
+  ];
+  await p.evaluate(([h, f]) => window.postMessage({ type: 'changedFiles', hash: h, files: f }, '*'), [hash, files] as const);
+  const folders = p.locator('.details .files .folder');
+  await expect(folders.locator('.folder-name')).toHaveText(['assets/img', 'src', 'core', 'webview']);
+  await expect(folders.locator('.count')).toHaveText(['1', '3', '2', '1']);
+  expect(await folders.evaluateAll((els) => els.map((e) => e.getAttribute('aria-expanded')))).toEqual(['true', 'true', 'true', 'true']);
+  const visible = p.locator('.details .file:visible .path');
+  await expect(visible).toHaveText(['logo.png', 'fileTree.ts', 'git.ts', 'old.ts → main.ts', 'README.md']);
+  // Deeper rows are indented further.
+  const x = (loc: ReturnType<typeof p.locator>) => loc.locator('.path, .folder-name').first().evaluate((e) => e.getBoundingClientRect().left);
+  const [src, core, git] = [await x(folders.nth(1)), await x(folders.nth(2)), await x(p.locator('.file', { hasText: 'git.ts' }))];
+  expect(core).toBeGreaterThan(src);
+  expect(git).toBeGreaterThan(core);
+  await p.screenshot({ path: 'test-results/screenshots/016-tree.png' });
+
+  // Click collapses a folder (its whole subtree hides), click again expands; Enter does the same.
+  await folders.nth(2).click();
+  await expect(folders.nth(2)).toHaveAttribute('aria-expanded', 'false');
+  await expect(visible).toHaveText(['logo.png', 'old.ts → main.ts', 'README.md']);
+  await folders.nth(1).focus();
+  await p.keyboard.press('Enter');
+  await expect(visible).toHaveText(['logo.png', 'README.md']);
+  await expect(folders.locator('.folder-name:visible')).toHaveText(['assets/img', 'src']);
+  await p.keyboard.press('Enter');
+  await folders.nth(2).click();
+  await expect(visible).toHaveText(['logo.png', 'fileTree.ts', 'git.ts', 'old.ts → main.ts', 'README.md']);
+
+  // Folders open no diff; files inside the tree still do.
+  await p.evaluate(() => { (window as unknown as { posted: unknown[] }).posted = []; });
+  await folders.nth(1).click();
+  await folders.nth(1).click();
+  await p.locator('.file', { hasText: 'main.ts' }).click();
+  await p.locator('.file', { hasText: 'git.ts' }).dblclick();
+  expect(await p.evaluate(() => (window as unknown as { posted: unknown[] }).posted)).toEqual([
+    { type: 'openDiff', hash, file: files[2], preview: true },
+    { type: 'openDiff', hash, file: files[0], preview: true },
+    { type: 'openDiff', hash, file: files[0], preview: true },
+    { type: 'openDiff', hash, file: files[0], preview: false },
+  ]);
+});
+
+test('files sit above the details; splitters resize the pane and the files, and their positions survive a reload', async ({ page: p }) => {
+  await p.setViewportSize({ width: 1000, height: 500 });
+  await p.addInitScript(() => {
+    // Fake VS Code webview state: survives the reload like VS Code's does.
+    const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
+    w.posted = [];
+    w.acquireVsCodeApi = () => ({
+      postMessage: (m: unknown) => w.posted.push(m),
+      getState: () => JSON.parse(sessionStorage.getItem('state') ?? 'null') ?? undefined,
+      setState: (s: unknown) => sessionStorage.setItem('state', JSON.stringify(s)),
+    });
+  });
+  await p.goto(page);
+  const load = async () => {
+    await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, commits: c }, '*'), commits);
+    await p.locator('.row').nth(1).click();
+    await p.evaluate((d) => window.postMessage({ type: 'details', details: d }, '*'), { ...commits[1]!, message: 'Commit number 1\n\nbody' });
+    await p.evaluate((h) => window.postMessage({ type: 'changedFiles', hash: h, files: [{ status: 'M', path: 'src/a.txt', binary: false }] }, '*'), commits[1]!.hash);
+    await expect(p.locator('.details .file')).toHaveCount(1);
+  };
+  await load();
+  const box = async (sel: string) => (await p.locator(sel).boundingBox())!;
+  // Files on top, splitter, then details; the vertical splitter sits between the list and the pane.
+  const [files, hSplit, info] = [await box('.details .files'), await box('.splitter-horizontal'), await box('.details .info')];
+  expect(files.y).toBeLessThan(hSplit.y);
+  expect(hSplit.y).toBeLessThan(info.y);
+  const [list, vSplit, pane] = [await box('.commits'), await box('.splitter-vertical'), await box('.details')];
+  expect(list.x + list.width).toBeLessThanOrEqual(vSplit.x + vSplit.width);
+  expect(vSplit.x).toBeLessThan(pane.x);
+  expect(pane.width).toBeCloseTo(400, -1); // 40% default
+
+  const drag = async (b: { x: number; y: number; width: number; height: number }, dx: number, dy: number) => {
+    const [x, y] = [b.x + b.width / 2, b.y + b.height / 2];
+    await p.mouse.move(x, y);
+    await p.mouse.down();
+    await p.mouse.move(x + dx / 2, y + dy / 2);
+    await p.mouse.move(x + dx, y + dy);
+    await p.mouse.up();
+  };
+  await drag(vSplit, -200, 0);
+  await drag(await box('.splitter-horizontal'), 0, -100);
+  const after = { pane: (await box('.details')).width, files: (await box('.details .files')).height, list: (await box('.commits')).width };
+  expect(after.pane).toBeCloseTo(pane.width + 200, -1);
+  expect(after.files).toBeCloseTo(files.height - 100, -1);
+  expect(after.list).toBeCloseTo(list.width - 200, -1);
+  await p.screenshot({ path: 'test-results/screenshots/016-splitters.png' });
+  expect(await p.evaluate(() => JSON.parse(sessionStorage.getItem('state')!))).toEqual({ paneWidth: after.pane, filesHeight: after.files });
+
+  // Reload the view: the saved positions come back.
+  await p.reload();
+  await load();
+  expect((await box('.details')).width).toBe(after.pane);
+  expect((await box('.details .files')).height).toBe(after.files);
+  // A saved size bigger than a smaller window still leaves room for the list and the details.
+  await p.setViewportSize({ width: 500, height: 200 });
+  expect((await box('.commits')).width).toBeGreaterThanOrEqual(140);
+  expect((await box('.details .info')).height).toBeGreaterThanOrEqual(35);
 });

@@ -1,4 +1,5 @@
 import type { ChangedFile, Commit, CommitDetails, ErrorKind } from '../core/git';
+import { fileTree, type TreeNode } from '../core/fileTree';
 
 export type Message =
   | { type: 'commits'; skip: number; limit?: number; commits: Commit[] }
@@ -8,7 +9,9 @@ export type Message =
   | { type: 'changedFiles'; hash: string | string[]; files: ChangedFile[]; gap?: number; error?: string }
   | { type: 'error'; kind: ErrorKind; message: string };
 
-declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
+/** Splitter positions in px, kept in the webview state (VS Code restores it when the view reloads). */
+interface Layout { paneWidth?: number; filesHeight?: number }
+declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState?(): Layout | undefined; setState?(s: Layout): void };
 // Standalone (browser/Playwright) there is no VS Code API; tests post messages directly.
 const vscode = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : undefined;
 const post = (msg: unknown) => vscode?.postMessage(msg);
@@ -205,24 +208,54 @@ function banner(gap = 0, error?: string): HTMLElement[] {
 }
 
 function renderFiles(el: HTMLElement, hash: string | string[], files: ChangedFile[], gap?: number, error?: string): void {
-  el.replaceChildren(...banner(gap, error), ...files.map((f) => {
-    const row = document.createElement('div');
-    row.className = 'file';
-    row.tabIndex = 0;
-    row.append(cell(`status status-${f.status}`, f.status), cell('path', f.oldPath ? `${f.oldPath} → ${f.path}` : f.path));
-    if (f.binary) {
-      row.append(cell('binary', 'Binary file changed'));
-      return row;
-    }
-    // Combined lists: the file carries base/target and the extension diffs those; hash is then just the newest commit.
-    const open = (preview: boolean) => post({ type: 'openDiff', hash: typeof hash === 'string' ? hash : hash[0], file: f, preview });
-    row.addEventListener('click', () => open(true));
-    row.addEventListener('dblclick', () => open(false));
-    row.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') open(true);
+  el.replaceChildren(...banner(gap, error), ...treeRows(fileTree(files), hash, 0));
+}
+
+/** Tree rows, indented by depth: a folder is a header (twisty, name, file count) above its children; all start expanded. */
+function treeRows(nodes: TreeNode[], hash: string | string[], depth: number): HTMLElement[] {
+  return nodes.map((n) => {
+    if (n.kind === 'file') return fileRow(n.file, n.name, hash, depth);
+    const group = document.createElement('div');
+    group.className = 'folder-group';
+    const head = document.createElement('div');
+    head.className = 'folder';
+    head.tabIndex = 0;
+    head.title = n.path;
+    head.style.paddingLeft = `${depth * 16}px`;
+    head.setAttribute('aria-expanded', 'true');
+    head.append(cell('twisty', '▾'), cell('folder-name', n.name), cell('count', String(n.count)));
+    const toggle = () => head.setAttribute('aria-expanded', String(!group.classList.toggle('collapsed')));
+    head.addEventListener('click', toggle);
+    head.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') toggle();
     });
+    const children = document.createElement('div');
+    children.className = 'folder-children';
+    children.append(...treeRows(n.children, hash, depth + 1));
+    group.append(head, children);
+    return group;
+  });
+}
+
+function fileRow(f: ChangedFile, name: string, hash: string | string[], depth: number): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'file';
+  row.tabIndex = 0;
+  row.title = f.oldPath ? `${f.oldPath} → ${f.path}` : f.path;
+  row.style.paddingLeft = `${depth * 16 + 14}px`; // + twisty width: names line up with folder names
+  row.append(cell(`status status-${f.status}`, f.status), cell('path', name));
+  if (f.binary) {
+    row.append(cell('binary', 'Binary file changed'));
     return row;
-  }));
+  }
+  // Combined lists: the file carries base/target and the extension diffs those; hash is then just the newest commit.
+  const open = (preview: boolean) => post({ type: 'openDiff', hash: typeof hash === 'string' ? hash : hash[0], file: f, preview });
+  row.addEventListener('click', () => open(true));
+  row.addEventListener('dblclick', () => open(false));
+  row.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') open(true);
+  });
+  return row;
 }
 
 /** "In N branches" plus a Hide/Show toggle for the names; empty until the reply for the shown commit arrives. */
@@ -375,7 +408,15 @@ function build(root: HTMLElement): HTMLElement {
   info.className = 'info';
   const files = document.createElement('div');
   files.className = 'files';
-  pane.append(info, files);
+  const layout: Layout = vscode?.getState?.() ?? {};
+  if (layout.paneWidth) pane.style.width = `${layout.paneWidth}px`;
+  if (layout.filesHeight) files.style.height = `${layout.filesHeight}px`;
+  const save = () => vscode?.setState?.(layout);
+  // Files on top, details below; CSS max-width/max-height keep a saved size inside a smaller window.
+  pane.append(files, splitter('horizontal', (e) => {
+    layout.filesHeight = Math.max(40, Math.round(e.clientY - pane.getBoundingClientRect().top));
+    files.style.height = `${layout.filesHeight}px`;
+  }, save), info);
   const toolbar = document.createElement('div');
   toolbar.className = 'toolbar';
   const button = document.createElement('button');
@@ -387,8 +428,30 @@ function build(root: HTMLElement): HTMLElement {
   const main = document.createElement('div');
   main.className = 'main';
   main.append(toolbar, list);
-  root.replaceChildren(main, pane);
+  root.replaceChildren(main, splitter('vertical', (e) => {
+    layout.paneWidth = Math.max(150, Math.round(root.getBoundingClientRect().right - e.clientX));
+    pane.style.width = `${layout.paneWidth}px`;
+  }, save), pane);
   return list;
+}
+
+/** A draggable bar: calls move while the pointer drags it, done when released. */
+function splitter(orientation: 'vertical' | 'horizontal', move: (e: PointerEvent) => void, done: () => void): HTMLElement {
+  const el = document.createElement('div');
+  el.className = `splitter splitter-${orientation}`;
+  el.setAttribute('role', 'separator');
+  el.setAttribute('aria-orientation', orientation);
+  // ponytail: mouse only; add arrow-key resizing if keyboard users need it.
+  el.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    el.setPointerCapture(e.pointerId);
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', () => {
+      el.removeEventListener('pointermove', move);
+      done();
+    }, { once: true });
+  });
+  return el;
 }
 
 const app = document.getElementById('app');

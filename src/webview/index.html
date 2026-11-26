@@ -14,7 +14,13 @@
     .commits { flex: 1; min-height: 0; overflow: auto; outline: none; position: relative; }
     .spacer { width: 1px; }
     .rows { position: absolute; top: 0; left: 0; right: 0; }
-    .details { width: 40%; overflow: auto; padding: 8px; border-left: 1px solid var(--vscode-panel-border, #ccc); }
+    .details { flex: none; width: 40%; min-width: 150px; max-width: calc(100% - 150px); display: flex; flex-direction: column; }
+    .splitter { flex: none; background: var(--vscode-panel-border, #ccc); background-clip: content-box; touch-action: none; }
+    .splitter-vertical { width: 1px; padding: 0 2px; margin: 0 -2px; z-index: 2; cursor: col-resize; }
+    .splitter-horizontal { height: 1px; padding: 2px 0; margin: -2px 0; z-index: 1; cursor: row-resize; }
+    .splitter:hover, .splitter:active { background-color: var(--vscode-sash-hoverBorder, #0090f1); }
+    .files { flex: none; height: 50%; min-height: 40px; max-height: calc(100% - 40px); box-sizing: border-box; overflow: auto; padding: 4px 8px; }
+    .info { flex: 1; min-height: 0; overflow: auto; padding: 8px; }
     .commits { container-type: inline-size; }
     /* height = ROW_HEIGHT in main.ts; right padding keeps the hash clear of an overlay scrollbar. */
     .row { position: absolute; left: 0; right: 0; box-sizing: border-box; height: 22px; display: flex; gap: 12px; padding: 0 16px 0 8px; line-height: 22px; white-space: nowrap; }
@@ -58,7 +64,13 @@
     .label { flex: none; width: 60px; color: var(--vscode-descriptionForeground, #717171); }
     .hash-value, .parents-value { font-family: var(--vscode-editor-font-family, monospace); word-break: break-all; }
     .copy { font: inherit; color: var(--vscode-button-foreground, #fff); background: var(--vscode-button-background, #0060c0); border: none; padding: 1px 8px; cursor: pointer; }
-    .files { margin-top: 8px; border-top: 1px solid var(--vscode-panel-border, #ccc); padding-top: 4px; }
+    .folder { display: flex; gap: 4px; line-height: 22px; white-space: nowrap; user-select: none; cursor: pointer; }
+    .folder:hover { background: var(--vscode-list-hoverBackground, #f0f0f0); }
+    .folder:focus { outline: 1px solid var(--vscode-focusBorder, #0090f1); outline-offset: -1px; }
+    .twisty { flex: none; width: 10px; text-align: center; transition: transform 0.1s; }
+    .collapsed > .folder .twisty { transform: rotate(-90deg); }
+    .collapsed > .folder-children { display: none; }
+    .count { color: var(--vscode-descriptionForeground, #717171); }
     .file { display: flex; gap: 8px; line-height: 22px; white-space: nowrap; user-select: none; }
     .file:hover { background: var(--vscode-list-hoverBackground, #f0f0f0); cursor: pointer; }
     .file:focus { outline: 1px solid var(--vscode-focusBorder, #0090f1); outline-offset: -1px; }
