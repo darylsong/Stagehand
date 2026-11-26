@@ -499,7 +499,7 @@ test('right-click on a row offers Checkout, which posts checkout(hash); double-c
   // Right-click an unselected row: it becomes the single selection and the menu offers Checkout.
   await rows.nth(2).click({ button: 'right' });
   await expect(rows.nth(2)).toHaveClass(/selected/);
-  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Cherry-Pick', 'Checkout', 'Compare with Local', 'Reset Current Branch to Here…', 'Revert Commit', 'Edit Commit Message…', 'New Branch…', 'New Tag…', 'Go to Child Commit', 'Go to Parent Commit']);
+  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Cherry-Pick', 'Checkout', 'Compare with Local', 'Reset Current Branch to Here…', 'Revert Commit', 'Undo Commit…', 'Edit Commit Message…', 'New Branch…', 'New Tag…', 'Go to Child Commit', 'Go to Parent Commit']);
   await p.screenshot({ path: 'test-results/screenshots/011-context-menu.png' });
   await menu.getByText('Checkout').click();
   await expect(menu).toHaveCount(0);
@@ -510,7 +510,7 @@ test('right-click on a row offers Checkout, which posts checkout(hash); double-c
   await p.keyboard.press('Escape');
   await expect(menu).toHaveCount(0);
   await rows.nth(2).click({ button: 'right' });
-  await rows.nth(14).click(); // clear of the menu, which now covers rows 3-12
+  await rows.nth(16).click(); // clear of the menu, which now covers rows 3-13
   await expect(menu).toHaveCount(0);
   await rows.nth(5).click();
 
@@ -518,7 +518,7 @@ test('right-click on a row offers Checkout, which posts checkout(hash); double-c
   await rows.nth(6).click({ modifiers: ['Shift'] });
   await rows.nth(5).click({ button: 'right' });
   await expect(p.locator('.row.selected')).toHaveCount(2);
-  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Cherry-Pick 2 Commits', 'Checkout', 'Compare with Local', 'Reset Current Branch to Here…', 'Revert 2 Commits', 'Edit Commit Message…', 'New Branch…', 'New Tag…', 'Go to Child Commit', 'Go to Parent Commit']);
+  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Cherry-Pick 2 Commits', 'Checkout', 'Compare with Local', 'Reset Current Branch to Here…', 'Revert 2 Commits', 'Undo Commit…', 'Edit Commit Message…', 'New Branch…', 'New Tag…', 'Go to Child Commit', 'Go to Parent Commit']);
   await expect(menu.getByText('Checkout')).toBeDisabled();
   await menu.getByText('Checkout').dispatchEvent('click');
   expect(await checkouts()).toHaveLength(1);
@@ -947,7 +947,7 @@ test('019: menu in Rider order with separators; Copy Revision Number and Cmd/Ctr
   await rows.nth(1).click({ modifiers: ['ControlOrMeta'] });
   await rows.nth(1).click({ button: 'right' });
   const kinds = await menu.locator('> *').evaluateAll((els) => els.map((el) => el.className === 'menu-separator' ? '|' : el.textContent));
-  expect(kinds).toEqual(['Copy Revision Number', 'Cherry-Pick 2 Commits', '|', 'Checkout', 'Compare with Local', '|', 'Reset Current Branch to Here…', 'Revert 2 Commits', '|', 'Edit Commit Message…', '|', 'New Branch…', 'New Tag…', '|', 'Go to Child Commit', 'Go to Parent Commit']);
+  expect(kinds).toEqual(['Copy Revision Number', 'Cherry-Pick 2 Commits', '|', 'Checkout', 'Compare with Local', '|', 'Reset Current Branch to Here…', 'Revert 2 Commits', 'Undo Commit…', '|', 'Edit Commit Message…', '|', 'New Branch…', 'New Tag…', '|', 'Go to Child Commit', 'Go to Parent Commit']);
   await expect(menu.getByText('Checkout')).toBeDisabled();
   await expect(menu.getByText('Copy Revision Number')).toBeEnabled();
   await p.screenshot({ path: 'test-results/screenshots/019-menu.png' });
@@ -1250,6 +1250,56 @@ test('025: Reset Current Branch to Here… is enabled for one commit (any commit
   await send({ type: 'commits', skip: 0, limit: 1000, commits: commits.slice(2) });
   await expect(p.locator('.row.selected')).toHaveCount(1);
   await expect(rows.nth(0)).toHaveClass(/selected/);
+});
+
+test('026: Undo Commit… is enabled only on a non-merge, non-root HEAD row and posts its hash; disabled on a merge HEAD', async ({ page: p }) => {
+  await p.addInitScript(() => {
+    const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
+    w.posted = [];
+    w.acquireVsCodeApi = () => ({ postMessage: (m: unknown) => w.posted.push(m) });
+  });
+  await p.goto(page);
+  const send = (m: unknown) => p.evaluate((msg) => window.postMessage(msg, '*'), m);
+  const chain = commits.map((c, i) => ({ ...c, parents: i < 24 ? [commits[i + 1]!.hash] : [] }));
+  const withHead = (i: number, extra: Partial<Commit> = {}) => chain.map((c, k) => (k === i ? { ...c, refs: ['HEAD -> refs/heads/main'], ...extra } : c));
+  const posted = async () => (await p.evaluate(() => (window as unknown as { posted: { type: string }[] }).posted))
+    .filter((m) => m.type === 'undoCommit');
+  const rows = p.locator('.row');
+  const menu = p.locator('.menu');
+  const undo = menu.getByText('Undo Commit…');
+  const undoOn = async (row: number) => {
+    await rows.nth(row).click();
+    await rows.nth(row).click({ button: 'right' });
+    const enabled = await undo.isEnabled();
+    await p.keyboard.press('Escape');
+    return enabled;
+  };
+
+  await send({ type: 'commits', skip: 0, commits: withHead(0) });
+  expect(await undoOn(1)).toBe(false); // not HEAD
+  expect(await undoOn(24)).toBe(false);
+  await rows.nth(0).click();
+  await rows.nth(0).click({ button: 'right' });
+  await expect(undo).toBeEnabled();
+  await p.screenshot({ path: 'test-results/screenshots/026-menu.png' });
+  await undo.click();
+  await expect(menu).toHaveCount(0);
+  expect(await posted()).toEqual([{ type: 'undoCommit', hash: commits[0]!.hash }]);
+
+  // Two selected, HEAD among them: disabled, clicking posts nothing.
+  await rows.nth(1).click({ modifiers: ['Shift'] });
+  await rows.nth(1).click({ button: 'right' });
+  await expect(undo).toBeDisabled();
+  await undo.dispatchEvent('click');
+  expect(await posted()).toHaveLength(1);
+  await p.keyboard.press('Escape');
+
+  // A merge HEAD, and a root HEAD (detached), are disabled.
+  await send({ type: 'commits', skip: 0, commits: withHead(0, { parents: [commits[1]!.hash, commits[5]!.hash] }) });
+  expect(await undoOn(0)).toBe(false);
+  await send({ type: 'commits', skip: 0, commits: chain.map((c, k) => (k === 24 ? { ...c, refs: ['HEAD'] } : c)) });
+  expect(await undoOn(24)).toBe(false);
+  expect(await posted()).toHaveLength(1);
 });
 
 test('the vertical splitter is drawn above the horizontal one where their grab margins overlap', async ({ page: p }) => {

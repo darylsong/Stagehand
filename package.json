@@ -89,6 +89,10 @@
         "title": "Stagehand: Ask for a Reset Mode"
       },
       {
+        "command": "stagehand.undoCommit",
+        "title": "Stagehand: Undo Commit"
+      },
+      {
         "command": "stagehand.revert",
         "title": "Stagehand: Revert Commits"
       },

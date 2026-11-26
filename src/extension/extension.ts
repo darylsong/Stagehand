@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import {
-  branchesContaining, changedFiles, checkout as gitCheckout, checkoutTarget, smartCheckout, STASH_KEPT, type CheckoutRefused, combinedChanges, commitDetails, currentBranch, fileAtRevision, firstParent, gitError, listCommits, localChanges, cherryPick, editMessage, headCommit, isPushed, newBranch, newTag, refNameError, type RefKind, reset, type ResetMode, revert, sequencerAbort, sequencerContinue, sequencerState, type ChangedFile, type ErrorKind,
+  branchesContaining, changedFiles, checkout as gitCheckout, checkoutTarget, smartCheckout, STASH_KEPT, type CheckoutRefused, combinedChanges, commitDetails, currentBranch, fileAtRevision, firstParent, gitError, listCommits, localChanges, cherryPick, editMessage, headCommit, isPushed, newBranch, newTag, refNameError, type RefKind, reset, type ResetMode, revert, undoCommit as gitUndoCommit, sequencerAbort, sequencerContinue, sequencerState, type ChangedFile, type ErrorKind,
 } from '../core/git';
 
 /** The first workspace folder's path; throws the 'no-folder' GitError when there is none. */
@@ -104,10 +104,10 @@ export async function checkout(hash: string, ui: CheckoutUi = checkoutUi, { stas
 
 /** Modal: true = edit anyway. Injectable so integration tests can answer it. */
 export type ConfirmForcePush = (hash: string) => Thenable<boolean>;
-const EDIT_ANYWAY = 'Edit Anyway';
-const confirmForcePush: ConfirmForcePush = (hash) => vscode.window
-  .showWarningMessage(`${hash.slice(0, 8)} is already pushed. Editing it means you'll need to force-push. Edit anyway?`, { modal: true }, EDIT_ANYWAY)
-  .then((choice) => choice === EDIT_ANYWAY);
+const forcePushWarning = (doing: string, verb: string): ConfirmForcePush => (hash) => vscode.window
+  .showWarningMessage(`${hash.slice(0, 8)} is already pushed. ${doing} it means you'll need to force-push. ${verb} anyway?`, { modal: true }, `${verb} Anyway`)
+  .then((choice) => choice === `${verb} Anyway`);
+const confirmForcePush = forcePushWarning('Editing', 'Edit');
 
 /** Rewords a commit (see core `editMessage`), warning first if the upstream has it. Returns the new hash, or undefined if cancelled. */
 export async function editCommitMessage(hash: string, message: string, confirm = confirmForcePush): Promise<string | undefined> {
@@ -115,6 +115,14 @@ export async function editCommitMessage(hash: string, message: string, confirm =
   const head = await headCommit(dir); // the compare-and-swap is against HEAD as it was before the modal
   if (await isPushed(dir, hash) && !(await confirm(hash))) return undefined;
   return editMessage(dir, hash, message, head);
+}
+
+/** Undoes HEAD (see core `undoCommit`), warning first if the upstream has it. Returns true, or false if cancelled. */
+export async function undoCommit(hash: string, confirm = forcePushWarning('Undoing', 'Undo')): Promise<boolean> {
+  const dir = repoDir();
+  if (await isPushed(dir, hash) && !(await confirm(hash))) return false;
+  await gitUndoCommit(dir, hash); // checks hash is still HEAD after the modal
+  return true;
 }
 
 /** Input box for a new branch/tag name, validated as you type. `show` is injectable so tests can read the options. */
@@ -204,6 +212,14 @@ export async function handleMessage(
         return;
       }
       post({ type: 'refresh' }); // keeps the selection; the commit is HEAD now, so it's still there
+    } else if (msg.type === 'undoCommit') {
+      try {
+        if (!(await run('stagehand.undoCommit', msg.hash))) return; // cancelled at the force-push warning
+      } catch (err) {
+        post({ type: 'sequencerError', message: (err as Error).message ?? String(err) });
+        return;
+      }
+      post({ type: 'refresh' });
     } else if (msg.type === 'compareWithLocal') {
       await run('stagehand.compareWithLocal', msg.hash);
     } else if (msg.type === 'copyRevision') {
@@ -291,6 +307,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('stagehand.newTag', (hash: string, name: string) => newTag(repoDir(), hash, name)),
     vscode.commands.registerCommand('stagehand.history.askResetMode', () => askResetMode()),
     vscode.commands.registerCommand('stagehand.reset', (hash: string, mode: ResetMode) => reset(repoDir(), hash, mode)),
+    vscode.commands.registerCommand('stagehand.undoCommit', (hash: string) => undoCommit(hash)),
     vscode.commands.registerCommand('stagehand.revert', (hashes: string[]) => revert(repoDir(), hashes)),
     vscode.commands.registerCommand('stagehand.cherryPick', (hashes: string[]) => cherryPick(repoDir(), hashes)),
     vscode.commands.registerCommand('stagehand.sequencerContinue', () => sequencerContinue(repoDir())),

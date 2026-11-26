@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { ChangedFile, Commit, CommitDetails } from '../core/git';
 import { CHERRY_PICK_DIRTY, gitError, REVERT_DIRTY, STASH_KEPT } from '../core/git';
-import { askRefName, askResetMode, checkout, editCommitMessage, handleMessage, historyView, repoDir, watchRepo, webviewHtml } from '../extension/extension';
+import { askRefName, askResetMode, checkout, editCommitMessage, handleMessage, historyView, repoDir, undoCommit, watchRepo, webviewHtml } from '../extension/extension';
 
 // Workspace repo (.vscode-test.mjs): "init" adds file.txt ("old"), "modify" changes it to "new".
 const commitNamed = async (subject: string) =>
@@ -915,5 +915,65 @@ suite('reset current branch', () => {
     assert.ok(items.every((i) => i.description));
     assert.strictEqual(options?.ignoreFocusOut, true);
     assert.strictEqual(await askResetMode((async () => undefined) as unknown as typeof vscode.window.showQuickPick), undefined);
+  });
+});
+
+suite('undo commit', () => {
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: repoDir(), encoding: 'utf8', stdio: 'pipe' }).trim();
+  let tip = '';
+  setup(() => { tip = git('rev-parse', 'HEAD'); });
+  teardown(() => {
+    git('reset', '-q', '--hard', tip); // test cleanup only
+    for (const key of ['branch.integration-branch.remote', 'branch.integration-branch.merge']) {
+      try {
+        git('config', '--unset', key);
+      } catch {
+        // not set
+      }
+    }
+    try {
+      git('remote', 'remove', 'origin');
+    } catch {
+      // no remote
+    }
+  });
+
+  test('stagehand.undoCommit moves the branch back one commit, keeping its changes staged', async () => {
+    const parent = git('rev-parse', 'HEAD~1');
+    assert.strictEqual(await vscode.commands.executeCommand('stagehand.undoCommit', tip), true);
+    assert.strictEqual(git('rev-parse', 'refs/heads/integration-branch'), parent);
+    assert.strictEqual(git('symbolic-ref', '--short', 'HEAD'), 'integration-branch');
+    assert.strictEqual(git('status', '--porcelain'), 'M  file.txt');
+  });
+
+  test('the undoCommit message undoes and posts refresh; a stale hash posts the refusal and changes nothing', async () => {
+    const parent = git('rev-parse', 'HEAD~1');
+    const posted: unknown[] = [];
+    await handleMessage({ type: 'undoCommit', hash: parent }, (r) => posted.push(r));
+    assert.deepStrictEqual(posted, [{ type: 'sequencerError', message: `Can't undo: ${parent.slice(0, 8)} is no longer HEAD` }]);
+    assert.strictEqual(git('rev-parse', 'HEAD'), tip);
+    const undone: unknown[] = [];
+    await handleMessage({ type: 'undoCommit', hash: tip }, (r) => undone.push(r));
+    assert.deepStrictEqual(undone, [{ type: 'refresh' }]);
+    assert.strictEqual(git('rev-parse', 'HEAD'), parent);
+  });
+
+  test('a HEAD the upstream has asks first (Cancel changes nothing); without an upstream nothing is asked', async () => {
+    const noModal = () => { throw new Error('no force-push warning expected'); };
+    const parent = git('rev-parse', 'HEAD~1');
+    git('remote', 'add', 'origin', 'https://example.invalid/r.git');
+    git('update-ref', 'refs/remotes/origin/integration-branch', parent);
+    git('config', 'branch.integration-branch.remote', 'origin');
+    git('config', 'branch.integration-branch.merge', 'refs/heads/integration-branch');
+    assert.strictEqual(await undoCommit(tip, noModal), true); // upstream is behind HEAD: not pushed
+    git('reset', '-q', '--soft', tip);
+    git('update-ref', 'refs/remotes/origin/integration-branch', tip);
+    const asked: string[] = [];
+    assert.strictEqual(await undoCommit(tip, async (h) => (asked.push(h), false)), false);
+    assert.deepStrictEqual(asked, [tip]);
+    assert.strictEqual(git('rev-parse', 'HEAD'), tip);
+    assert.strictEqual(await undoCommit(tip, async (h) => (asked.push(h), true)), true);
+    assert.strictEqual(git('rev-parse', 'HEAD'), parent);
+    git('update-ref', '-d', 'refs/remotes/origin/integration-branch');
   });
 });

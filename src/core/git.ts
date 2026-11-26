@@ -565,3 +565,17 @@ export async function reset(cwd: string, hash: string, mode: ResetMode): Promise
     throw new Error(errText(err));
   }
 }
+
+/** `git reset --soft HEAD~1` for `hash`, which must still be HEAD and be neither a merge nor the root: its changes stay staged. */
+export async function undoCommit(cwd: string, hash: string): Promise<void> {
+  const short = hex(hash).slice(0, 8);
+  const [head, ...parents] = (await git(cwd, ['rev-list', '--parents', '-n', '1', 'HEAD'])).trim().split(' ');
+  if (!head!.startsWith(hash.toLowerCase())) throw new Error(`Can't undo: ${short} is no longer HEAD`);
+  if (parents.length > 1) throw new Error("Can't undo a merge commit");
+  if (!parents.length) throw new Error("Can't undo the root commit");
+  try {
+    await git(cwd, ['reset', '-q', '--soft', parents[0]!, '--']);
+  } catch (err) {
+    throw new Error(errText(err));
+  }
+}
