@@ -44,6 +44,13 @@ suite('stagehand.history', () => {
     assert.deepStrictEqual(files, [{ status: 'A', path: 'file.txt', binary: false }]);
   });
 
+  test('changedFiles with two hashes returns the combined list', async () => {
+    const [init, modify] = [await commitNamed('init'), await commitNamed('modify')];
+    const files = await vscode.commands.executeCommand<ChangedFile[]>('stagehand.history.changedFiles', [modify.hash, init.hash]);
+    // init added file.txt and modify changed it: added overall, from nothing (init is a root) to modify.
+    assert.deepStrictEqual(files, [{ status: 'A', path: 'file.txt', binary: false, target: modify.hash }]);
+  });
+
   const activeDiff = () => {
     const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
     assert.ok(tab?.input instanceof vscode.TabInputTextDiff, 'active tab is a diff');
@@ -83,6 +90,18 @@ suite('stagehand.history', () => {
     assert.strictEqual(input.modified.path, '/gone.txt');
     assert.strictEqual(await text(input.original), 'old\n');
     assert.strictEqual(await text(input.modified), '');
+  });
+
+  test('openDiff of a combined-list file opens the base..target range diff', async () => {
+    const [init, modify] = [await commitNamed('init'), await commitNamed('modify')];
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    const file = { status: 'M', path: 'file.txt', binary: false, base: init.hash, target: modify.hash };
+    // The hash argument is ignored for a range: pass init so a single-commit diff would show '' on the left.
+    await vscode.commands.executeCommand('stagehand.history.openDiff', init.hash, file);
+    const { tab, input } = activeDiff();
+    assert.strictEqual(await text(input.original), 'old\n');
+    assert.strictEqual(await text(input.modified), 'new\n');
+    assert.strictEqual(tab.label, `file.txt (${init.hash.slice(0, 8)}..${modify.hash.slice(0, 8)})`);
   });
 
   test('openDiff opens nothing for a binary file', async () => {
@@ -172,6 +191,14 @@ suite('webview message handling', () => {
     const replies: unknown[] = [];
     await handleMessage({ type: 'changedFiles', hash: init!.hash }, (r) => replies.push(r));
     assert.deepStrictEqual(replies, [{ type: 'changedFiles', hash: init!.hash, files: [{ status: 'A', path: 'file.txt', binary: false }] }]);
+  });
+
+  test('changedFiles with a list of hashes through the real command replies with the combined list', async () => {
+    const [init, modify] = [await commitNamed('init'), await commitNamed('modify')];
+    const replies: unknown[] = [];
+    const hashes = [modify.hash, init.hash];
+    await handleMessage({ type: 'changedFiles', hash: hashes }, (r) => replies.push(r));
+    assert.deepStrictEqual(replies, [{ type: 'changedFiles', hash: hashes, files: [{ status: 'A', path: 'file.txt', binary: false, target: modify.hash }] }]);
   });
 
   test('openDiff runs the command with hash, file and preview, and posts no reply', async () => {

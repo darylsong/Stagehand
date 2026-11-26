@@ -121,12 +121,18 @@ export interface ChangedFile {
   oldPath?: string;
   /** numstat reported `-`: git sees binary content. */
   binary: boolean;
+  /** Combined lists only: the revisions the diff runs between (base undefined = the file starts empty). */
+  base?: string;
+  target?: string;
 }
 
 /** Files a commit changed: against its first parent, or everything as added for a root commit. Renames detected. */
 export async function changedFiles(cwd: string, hash: string): Promise<ChangedFile[]> {
   // Trust boundary: firstParent rejects anything but a hex hash.
-  const parent = await firstParent(cwd, hash);
+  return diffFiles(cwd, await firstParent(cwd, hash), hash);
+}
+
+async function diffFiles(cwd: string, parent: string | undefined, hash: string): Promise<ChangedFile[]> {
   const out = await git(cwd, [
     'diff-tree', '-r', '-M', '-z', '--raw', '--numstat', '--no-commit-id',
     ...(parent ? [parent, hash] : ['--root', hash]), '--',
@@ -150,6 +156,52 @@ export function parseDiffTree(out: string): ChangedFile[] {
     // numstat: "added\tdeleted\tpath", or "added\tdeleted\t" followed by old and new paths for renames.
     file.binary = stat.startsWith('-\t-\t');
     i += stat.endsWith('\t') ? 3 : 1;
+  }
+  return files;
+}
+
+const hex = (h: string) => {
+  if (!/^[0-9a-f]{4,64}$/i.test(h)) throw new Error(`Not a commit hash: ${h}`);
+  return h;
+};
+
+/**
+ * One combined file list for several commits on one line of history (each an ancestor of the newest).
+ * Per file: base = first parent of the oldest selected commit that touched it, target = the newest one that did.
+ * Files that don't exist at either end (added then deleted inside the selection) are omitted.
+ */
+export async function combinedChanges(cwd: string, hashes: string[]): Promise<ChangedFile[]> {
+  hashes.forEach(hex);
+  const tips = (await git(cwd, ['merge-base', '--independent', ...hashes])).trim().split('\n');
+  // ponytail: plain error for now; issue 010 turns this into the in-view banner.
+  if (tips.length !== 1) throw new Error("Selected commits are on different branches; can't combine");
+  const base = (await git(cwd, ['merge-base', '--octopus', ...hashes])).trim();
+  const isSelected = (full: string) => hashes.some((h) => full.startsWith(h.toLowerCase()));
+  // Newest first; children before parents. `^base` bounds the walk; base itself is added back if selected.
+  const lines = (await git(cwd, ['rev-list', '--topo-order', '--parents', tips[0]!, `^${base}`, '--'])).trim().split('\n');
+  const ordered = lines.filter(Boolean).map((l) => l.split(' ')).filter(([h]) => isSelected(h!));
+  if (isSelected(base)) ordered.push([base, ...(await git(cwd, ['show', '-s', '--format=%P', base, '--'])).trim().split(' ')]);
+
+  const byPath = new Map<string, { first: string; firstStatus: string; firstParent?: string; last: string; lastStatus: string; binary: boolean; touches: number }>();
+  for (const [hash, parent] of ordered.reverse()) { // oldest first
+    for (const f of await diffFiles(cwd, parent || undefined, hash!)) {
+      // ponytail: a rename counts as delete old + add new, so combined lists show no R; track renames if users miss them.
+      const parts = f.oldPath && f.status === 'R' ? [{ path: f.oldPath, status: 'D' }, { path: f.path, status: 'A' }]
+        : [{ path: f.path, status: f.status === 'C' ? 'A' : f.status }];
+      for (const { path, status } of parts) {
+        const e = byPath.get(path);
+        if (e) Object.assign(e, { last: hash!, lastStatus: status, binary: e.binary || f.binary, touches: e.touches + 1 });
+        else byPath.set(path, { first: hash!, firstStatus: status, firstParent: parent || undefined, last: hash!, lastStatus: status, binary: f.binary, touches: 1 });
+      }
+    }
+  }
+  const files: ChangedFile[] = [];
+  for (const [path, e] of [...byPath].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    const before = e.firstStatus !== 'A';
+    const after = e.lastStatus !== 'D';
+    if (!before && !after) continue;
+    const status = !before ? 'A' : !after ? 'D' : e.touches === 1 ? e.firstStatus : 'M';
+    files.push({ status, path, binary: e.binary, ...(e.firstParent && { base: e.firstParent }), target: e.last });
   }
   return files;
 }

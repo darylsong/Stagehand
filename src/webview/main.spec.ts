@@ -195,6 +195,66 @@ test('click opens a preview diff, double click pins it, Enter opens the focused 
   await p.screenshot({ path: 'test-results/screenshots/007-files.png' });
 });
 
+test('Ctrl-click toggles, Shift-click selects a range, Shift+Down extends; the pane shows the count and the combined files', async ({ page: p }) => {
+  await p.setViewportSize({ width: 900, height: 400 });
+  await p.addInitScript(() => {
+    const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
+    w.posted = [];
+    w.acquireVsCodeApi = () => ({ postMessage: (m: unknown) => w.posted.push(m) });
+  });
+  await p.goto(page);
+  await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, commits: c }, '*'), commits);
+  const rows = p.locator('.row');
+  const selectedIndices = () => p.locator('.row.selected').evaluateAll((els) => els.map((e) => Number((e as HTMLElement).dataset.index)));
+  const posted = () => p.evaluate(() => (window as unknown as { posted: unknown[] }).posted);
+  const clear = () => p.evaluate(() => { (window as unknown as { posted: unknown[] }).posted = []; });
+  const h = (...i: number[]) => i.map((k) => commits[k]!.hash);
+
+  await rows.nth(1).click();
+  await rows.nth(3).click({ modifiers: ['Control'] });
+  expect(await selectedIndices()).toEqual([1, 3]);
+  await rows.nth(1).click({ modifiers: ['Control'] });
+  expect(await selectedIndices()).toEqual([3]);
+  await rows.nth(1).click({ modifiers: ['Control'] });
+  expect(await selectedIndices()).toEqual([1, 3]);
+
+  // Shift-click: range from the anchor (the last clicked row, 1) to the clicked row, replacing the selection.
+  await clear();
+  await rows.nth(4).click({ modifiers: ['Shift'] });
+  expect(await selectedIndices()).toEqual([1, 2, 3, 4]);
+  expect(await posted()).toEqual([{ type: 'changedFiles', hash: h(1, 2, 3, 4) }]);
+  await expect(p.locator('.details .info')).toHaveText('4 commits selected');
+
+  await clear();
+  await p.keyboard.press('Shift+ArrowDown');
+  expect(await selectedIndices()).toEqual([1, 2, 3, 4, 5]);
+  await expect(p.locator('.details .info')).toHaveText('5 commits selected');
+  await p.keyboard.press('Shift+ArrowUp');
+  await p.keyboard.press('Shift+ArrowUp');
+  expect(await selectedIndices()).toEqual([1, 2, 3]);
+  expect((await posted()).at(-1)).toEqual({ type: 'changedFiles', hash: h(1, 2, 3) });
+
+  // The combined reply is shown; opening a file posts the file with its base/target range.
+  const files: ChangedFile[] = [
+    { status: 'M', path: 'README.md', binary: false, base: h(4)[0], target: h(1)[0] },
+    { status: 'A', path: 'src/new.ts', binary: false, base: h(3)[0], target: h(2)[0] },
+  ];
+  await p.evaluate(([hs, f]) => window.postMessage({ type: 'changedFiles', hash: hs, files: f }, '*'), [h(1, 2, 3, 4), files] as const);
+  await expect(p.locator('.details .file')).toHaveCount(0); // reply for an older selection is dropped
+  await p.evaluate(([hs, f]) => window.postMessage({ type: 'changedFiles', hash: hs, files: f }, '*'), [h(1, 2, 3), files] as const);
+  await expect(p.locator('.details .file .path')).toHaveText(['README.md', 'src/new.ts']);
+  await p.screenshot({ path: 'test-results/screenshots/009-multi-select.png' });
+  await clear();
+  await p.locator('.details .file').nth(0).click();
+  expect(await posted()).toEqual([{ type: 'openDiff', hash: h(1)[0], file: files[0], preview: true }]);
+
+  // A plain click goes back to one commit with its details.
+  await clear();
+  await rows.nth(2).click();
+  expect(await selectedIndices()).toEqual([2]);
+  expect(await posted()).toEqual([{ type: 'commitDetails', hash: h(2)[0] }, { type: 'changedFiles', hash: h(2)[0] }]);
+});
+
 const states = [
   { kind: 'no-folder', message: 'No folder open' },
   { kind: 'not-repo', message: 'Not a git repository' },

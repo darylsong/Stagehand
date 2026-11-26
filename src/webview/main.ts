@@ -3,7 +3,7 @@ import type { ChangedFile, Commit, CommitDetails, ErrorKind } from '../core/git'
 export type Message =
   | { type: 'commits'; skip: number; commits: Commit[] }
   | { type: 'details'; details: CommitDetails }
-  | { type: 'changedFiles'; hash: string; files: ChangedFile[] }
+  | { type: 'changedFiles'; hash: string | string[]; files: ChangedFile[] }
   | { type: 'error'; kind: ErrorKind; message: string };
 
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
@@ -35,7 +35,10 @@ const OVERSCAN = 10; // rows rendered above and below the viewport
 const PREFETCH = 200; // request the next page when the viewport is this many rows from the end
 
 let commits: Commit[] = [];
-let selected = -1;
+let selected = new Set<number>(); // indices into commits
+let anchor = -1; // where a Shift range starts
+let lead = -1; // the row Up/Down move from
+let filesKey = ''; // the changedFiles request whose reply we're waiting for
 let loading = true; // the first page is requested on load
 let done = false; // a short page came back: no more commits
 
@@ -53,12 +56,12 @@ function renderRows(list: HTMLElement): void {
   for (let i = first; i < last; i++) {
     const c = commits[i]!;
     const row = document.createElement('div');
-    row.className = i === selected ? 'row selected' : 'row';
+    row.className = selected.has(i) ? 'row selected' : 'row';
     row.dataset.index = String(i);
     row.style.top = `${i * ROW_HEIGHT}px`;
     row.title = c.hash;
     row.setAttribute('role', 'option');
-    row.setAttribute('aria-selected', String(i === selected));
+    row.setAttribute('aria-selected', String(selected.has(i)));
     row.append(
       cell('subject', c.subject), cell('author', c.authorName),
       cell('date', relativeDate(c.authorDate)), cell('hash', c.hash.slice(0, 8)),
@@ -69,18 +72,41 @@ function renderRows(list: HTMLElement): void {
   if (!loading && !done && last >= commits.length - PREFETCH) loadMore();
 }
 
-function select(list: HTMLElement, i: number): void {
-  if (i < 0 || i >= commits.length || i === selected) return;
-  selected = i;
+const range = (a: number, b: number) => Array.from({ length: Math.abs(a - b) + 1 }, (_, k) => Math.min(a, b) + k);
+
+/** Plain: select only i. toggle (Cmd/Ctrl): add/remove i. extend (Shift): anchor..i. */
+function select(list: HTMLElement, i: number, mode: 'plain' | 'toggle' | 'extend' = 'plain'): void {
+  if (i < 0 || i >= commits.length) return;
+  if (mode === 'plain' && selected.size === 1 && selected.has(i)) return;
+  if (mode === 'extend' && anchor >= 0) selected = new Set(range(anchor, i));
+  else if (mode === 'toggle') {
+    if (!selected.delete(i)) selected.add(i);
+    anchor = i;
+  } else {
+    selected = new Set([i]);
+    anchor = i;
+  }
+  lead = i;
   // Keep the selected row in view (the virtual-list version of scrollIntoView({block:'nearest'})).
   const top = i * ROW_HEIGHT;
   if (top < list.scrollTop) list.scrollTop = top;
   else if (top + ROW_HEIGHT > list.scrollTop + list.clientHeight) list.scrollTop = top + ROW_HEIGHT - list.clientHeight;
   renderRows(list);
-  const hash = commits[i]!.hash;
-  post({ type: 'commitDetails', hash });
-  post({ type: 'changedFiles', hash });
+  const info = document.querySelector<HTMLElement>('.info')!;
+  const files = document.querySelector<HTMLElement>('.files')!;
+  const hashes = [...selected].sort((a, b) => a - b).map((k) => commits[k]!.hash);
+  filesKey = JSON.stringify(hashes.length === 1 ? hashes[0] : hashes);
+  if (hashes.length === 1) {
+    post({ type: 'commitDetails', hash: hashes[0] });
+    post({ type: 'changedFiles', hash: hashes[0] });
+    return;
+  }
+  info.replaceChildren(...(hashes.length ? [cell('selection-count', `${hashes.length} commits selected`)] : []));
+  files.replaceChildren();
+  if (hashes.length) post({ type: 'changedFiles', hash: hashes });
 }
+
+const selectedHash = () => (selected.size === 1 ? commits[[...selected][0]!]?.hash : undefined);
 
 function field(label: string, value: string): HTMLElement {
   const el = document.createElement('div');
@@ -89,7 +115,7 @@ function field(label: string, value: string): HTMLElement {
   return el;
 }
 
-function renderFiles(el: HTMLElement, hash: string, files: ChangedFile[]): void {
+function renderFiles(el: HTMLElement, hash: string | string[], files: ChangedFile[]): void {
   el.replaceChildren(...files.map((f) => {
     const row = document.createElement('div');
     row.className = 'file';
@@ -99,7 +125,8 @@ function renderFiles(el: HTMLElement, hash: string, files: ChangedFile[]): void 
       row.append(cell('binary', 'Binary file changed'));
       return row;
     }
-    const open = (preview: boolean) => post({ type: 'openDiff', hash, file: f, preview });
+    // Combined lists: the file carries base/target and the extension diffs those; hash is then just the newest commit.
+    const open = (preview: boolean) => post({ type: 'openDiff', hash: typeof hash === 'string' ? hash : hash[0], file: f, preview });
     row.addEventListener('click', () => open(true));
     row.addEventListener('dblclick', () => open(false));
     row.addEventListener('keydown', (e) => {
@@ -137,13 +164,13 @@ export function render(root: HTMLElement, msg: Message): void {
   }
   if (msg.type === 'changedFiles') {
     const el = root.querySelector<HTMLElement>('.files');
-    if (el && msg.hash === commits[selected]?.hash) renderFiles(el, msg.hash, msg.files);
+    if (el && JSON.stringify(msg.hash) === filesKey) renderFiles(el, msg.hash, msg.files);
     return;
   }
   if (msg.type === 'details') {
     const pane = root.querySelector<HTMLElement>('.info');
     // Ignore late replies for a commit that is no longer selected.
-    if (pane && msg.details.hash === commits[selected]?.hash) renderDetails(pane, msg.details);
+    if (pane && msg.details.hash === selectedHash()) renderDetails(pane, msg.details);
     return;
   }
   loading = false;
@@ -158,7 +185,9 @@ export function render(root: HTMLElement, msg: Message): void {
     return;
   }
   commits = msg.commits;
-  selected = -1;
+  selected = new Set();
+  anchor = lead = -1;
+  filesKey = '';
   const list = document.createElement('div');
   list.className = 'commits';
   list.tabIndex = 0;
@@ -174,13 +203,13 @@ export function render(root: HTMLElement, msg: Message): void {
   list.addEventListener('scroll', () => renderRows(list));
   list.addEventListener('click', (e) => {
     const row = (e.target as HTMLElement).closest<HTMLElement>('.row');
-    if (row) select(list, Number(row.dataset.index));
+    if (row) select(list, Number(row.dataset.index), e.shiftKey ? 'extend' : e.ctrlKey || e.metaKey ? 'toggle' : 'plain');
   });
   list.addEventListener('keydown', (e) => {
     const step = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
     if (!step) return;
     e.preventDefault();
-    select(list, selected < 0 ? 0 : selected + step);
+    select(list, lead < 0 ? 0 : lead + step, e.shiftKey && lead >= 0 ? 'extend' : 'plain');
   });
   const pane = document.createElement('div');
   pane.className = 'details';

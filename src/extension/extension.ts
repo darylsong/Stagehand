@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import {
-  changedFiles, commitDetails, currentBranch, fileAtRevision, firstParent, gitError, listCommits, type ChangedFile, type ErrorKind,
+  changedFiles, combinedChanges, commitDetails, currentBranch, fileAtRevision, firstParent, gitError, listCommits, type ChangedFile, type ErrorKind,
 } from '../core/git';
 
 /** The first workspace folder's path; throws the 'no-folder' GitError when there is none. */
@@ -17,15 +17,20 @@ type Run = (command: string, ...args: unknown[]) => Thenable<unknown>;
 const runCommand: Run = (command, ...args) => vscode.commands.executeCommand(command, ...args);
 
 type WebviewMessage = {
-  type: string; skip?: number; limit?: number; hash?: string; text?: string; file?: ChangedFile; preview?: boolean;
+  type: string; skip?: number; limit?: number; hash?: string | string[]; text?: string; file?: ChangedFile; preview?: boolean;
 };
 
 /** `stagehand:/<path>?<rev>`; an empty rev means the file doesn't exist on that side. */
 const revUri = (rev: string | undefined, path: string) => vscode.Uri.from({ scheme: 'stagehand', path: `/${path}`, query: rev ?? '' });
 
-/** Opens the parent→commit diff of one changed file. Binary files open nothing. */
+/** Opens the parent→commit diff of one changed file (base→target for a combined list). Binary files open nothing. */
 export async function openDiff(hash: string, file: ChangedFile, preview = true): Promise<void> {
   if (file.binary) return;
+  if (file.target) {
+    const title = `${basename(file.path)} (${file.base?.slice(0, 8) ?? 'empty'}..${file.target.slice(0, 8)})`;
+    await vscode.commands.executeCommand('vscode.diff', revUri(file.base, file.path), revUri(file.target, file.path), title, { preview });
+    return;
+  }
   const parent = await firstParent(repoDir(), hash);
   // Added/deleted files: fileAtRevision returns '' for the side where the path doesn't exist.
   const left = revUri(parent, file.oldPath ?? file.path);
@@ -80,7 +85,8 @@ export function activate(context: vscode.ExtensionContext): void {
       listCommits(repoDir(), { skip, limit }),
     ),
     vscode.commands.registerCommand('stagehand.history.commitDetails', (hash: string) => commitDetails(repoDir(), hash)),
-    vscode.commands.registerCommand('stagehand.history.changedFiles', (hash: string) => changedFiles(repoDir(), hash)),
+    vscode.commands.registerCommand('stagehand.history.changedFiles', (hash: string | string[]) =>
+      Array.isArray(hash) ? combinedChanges(repoDir(), hash) : changedFiles(repoDir(), hash)),
     vscode.commands.registerCommand('stagehand.history.openDiff', openDiff),
     vscode.workspace.registerTextDocumentContentProvider('stagehand', {
       provideTextDocumentContent: (uri) => (uri.query ? fileAtRevision(repoDir(), uri.query, uri.path.slice(1)) : ''),
