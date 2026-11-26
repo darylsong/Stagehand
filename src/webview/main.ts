@@ -3,8 +3,8 @@ import { fileTree, type TreeNode } from '../core/fileTree';
 import { graph, type GraphRow, type Lanes } from '../core/graph';
 
 export type Message =
-  | { type: 'commits'; skip: number; limit?: number; commits: Commit[]; revertStoppedAt?: string }
-  | { type: 'revertError'; message: string }
+  | { type: 'commits'; skip: number; limit?: number; commits: Commit[]; stopped?: { op: 'revert' | 'cherry-pick'; at: string } }
+  | { type: 'sequencerError'; message: string }
   | { type: 'refresh' }
   | { type: 'details'; details: CommitDetails }
   | { type: 'branches'; hash: string; branches: string[] }
@@ -119,8 +119,8 @@ let branches: { hash: string; names: string[] } | undefined; // the latest branc
 let showBranches = false; // the "In N branches" list is expanded
 let loading = true; // the first page is requested on load
 let done = false; // a short page came back: no more commits
-let revertStoppedAt: string | undefined; // a revert sequence is stopped at this commit (from the last first-page reply)
-let revertError: string | undefined; // why the last revert/continue/abort was refused
+let stopped: { op: 'revert' | 'cherry-pick'; at: string } | undefined; // a stopped revert/cherry-pick (from the last first-page reply)
+let sequencerError: string | undefined; // why the last revert/cherry-pick/continue/abort was refused
 
 /** Reloads every loaded commit (at least a page); the skip-0 reply keeps the selection. */
 function refresh(): void {
@@ -201,7 +201,7 @@ function showSelection(): void {
   if (hashes.length) post({ type: 'changedFiles', hash: hashes });
 }
 
-/** The row context menu, in Rider's order: Copy │ Checkout, Compare with Local (one commit only) │ Revert (no merges). Inapplicable items are disabled. */
+/** The row context menu, in Rider's order: Copy, Cherry-Pick (no merges) │ Checkout, Compare with Local (one commit only) │ Revert (no merges). Inapplicable items are disabled. */
 function showMenu(x: number, y: number): void {
   hideMenu();
   const picked = [...selected].sort((a, b) => a - b).map((i) => commits[i]!);
@@ -225,11 +225,14 @@ function showMenu(x: number, y: number): void {
     return el;
   };
   const separator = () => Object.assign(document.createElement('div'), { className: 'menu-separator', role: 'separator' });
-  menu.append(item('Copy Revision Number', copyMessage()), separator(),
+  const hasMerge = picked.some((c) => c.parents.length > 1);
+  const hashes = picked.map((c) => c.hash);
+  menu.append(item('Copy Revision Number', copyMessage()),
+    item(picked.length === 1 ? 'Cherry-Pick' : `Cherry-Pick ${picked.length} Commits`, { type: 'cherryPick', hash: hashes }, hasMerge), separator(),
     item('Checkout', { type: 'checkout', hash: picked[0]!.hash }, picked.length !== 1),
     item('Compare with Local', { type: 'compareWithLocal', hash: picked[0]!.hash }, picked.length !== 1), separator());
   menu.append(item(picked.length === 1 ? 'Revert Commit' : `Revert ${picked.length} Commits`,
-    { type: 'revert', hash: picked.map((c) => c.hash) }, picked.some((c) => c.parents.length > 1)));
+    { type: 'revert', hash: hashes }, hasMerge));
   document.body.append(menu);
   menu.querySelector<HTMLElement>('.menu-item:not(:disabled)')?.focus();
 }
@@ -384,8 +387,8 @@ export function render(root: HTMLElement, msg: Message): void {
     if (el) renderBranches(el, msg.hash);
     return;
   }
-  if (msg.type === 'revertError') {
-    revertError = msg.message;
+  if (msg.type === 'sequencerError') {
+    sequencerError = msg.message;
     renderNotice(root);
     return;
   }
@@ -417,8 +420,8 @@ export function render(root: HTMLElement, msg: Message): void {
   selected = new Set(before.flatMap((h) => (index.has(h) ? [index.get(h)!] : [])));
   anchor = index.get(anchorHash) ?? -1;
   lead = index.get(leadHash) ?? -1;
-  revertStoppedAt = msg.revertStoppedAt;
-  revertError = undefined;
+  stopped = msg.stopped;
+  sequencerError = undefined;
   const list = existing ?? build(root);
   renderNotice(root);
   list.querySelector<HTMLElement>('.spacer')!.style.height = `${commits.length * ROW_HEIGHT}px`;
@@ -427,14 +430,15 @@ export function render(root: HTMLElement, msg: Message): void {
   if (selected.size !== before.length || !existing) showSelection();
 }
 
-/** Above the list: a refused revert's reason, and the stopped-revert banner with Continue and Abort. */
+/** Above the list: a refused revert/cherry-pick's reason, and the stopped-sequence banner with Continue and Abort. */
 function renderNotice(root: HTMLElement): void {
   const el = root.querySelector<HTMLElement>('.notice');
   if (!el) return;
-  el.replaceChildren(...(revertError ? [cell('banner banner-error revert-error', revertError)] : []));
-  if (!revertStoppedAt) return;
-  const banner = cell('banner revert-banner', `Revert stopped at ${revertStoppedAt.slice(0, 8)}: resolve the conflicts, then Continue or Abort`);
-  for (const [label, type] of [['Continue', 'revertContinue'], ['Abort', 'revertAbort']] as const) {
+  el.replaceChildren(...(sequencerError ? [cell('banner banner-error sequencer-error', sequencerError)] : []));
+  if (!stopped) return;
+  const op = stopped.op === 'revert' ? 'Revert' : 'Cherry-pick';
+  const banner = cell('banner sequencer-banner', `${op} stopped at ${stopped.at.slice(0, 8)}: resolve the conflicts, then Continue or Abort`);
+  for (const [label, type] of [['Continue', 'sequencerContinue'], ['Abort', 'sequencerAbort']] as const) {
     const button = document.createElement('button');
     button.className = `banner-button ${type}`;
     button.textContent = label;

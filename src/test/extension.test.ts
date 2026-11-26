@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { ChangedFile, Commit, CommitDetails } from '../core/git';
-import { gitError, REVERT_DIRTY, STASH_KEPT } from '../core/git';
+import { CHERRY_PICK_DIRTY, gitError, REVERT_DIRTY, STASH_KEPT } from '../core/git';
 import { checkout, handleMessage, historyView, repoDir, watchRepo, webviewHtml } from '../extension/extension';
 
 // Workspace repo (.vscode-test.mjs): "init" adds file.txt ("old"), "modify" changes it to "new".
@@ -564,7 +564,7 @@ suite('refresh when the repository changes', function () {
   });
 });
 
-suite('revert', () => {
+suite('revert and cherry-pick', () => {
   const git = (...args: string[]) => execFileSync('git', args, { cwd: repoDir(), encoding: 'utf8', stdio: 'pipe' }).trim();
   const file = () => join(repoDir(), 'file.txt');
   let tip = '';
@@ -578,19 +578,22 @@ suite('revert', () => {
     tip = git('rev-parse', 'HEAD');
   });
   teardown(() => {
-    try {
-      git('revert', '--abort');
-    } catch {
-      // no revert in progress
+    for (const op of ['revert', 'cherry-pick']) {
+      try {
+        git(op, '--abort');
+      } catch {
+        // none in progress
+      }
     }
     git('reset', '-q', '--hard', tip);
   });
   const replies = async (msg: Parameters<typeof handleMessage>[0]) => {
-    const posted: { type: string; message?: string; revertStoppedAt?: string }[] = [];
+    const posted: { type: string; message?: string; stopped?: { op: string; at: string } }[] = [];
     await handleMessage(msg, (r) => posted.push(r as { type: string }));
     return posted;
   };
-  const stoppedAt = async () => (await replies({ type: 'loadCommits', skip: 0, limit: 1000 }))[0]!.revertStoppedAt;
+  const stopped = async () => (await replies({ type: 'loadCommits', skip: 0, limit: 1000 }))[0]!.stopped;
+  const stoppedAt = async () => (await stopped())?.at;
 
   test('stagehand.revert creates one revert commit per commit, newest first, with git\'s message', async () => {
     const modify = await commitNamed('modify');
@@ -609,9 +612,9 @@ suite('revert', () => {
     const modify = await commitNamed('modify');
     const other = git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit-tree', git('rev-parse', 'HEAD^{tree}'), '-p', 'HEAD', '-m', 'elsewhere');
     assert.deepStrictEqual(await replies({ type: 'revert', hash: [other] }),
-      [{ type: 'revertError', message: `Can't revert: ${other.slice(0, 8)} isn't in the current branch` }]);
+      [{ type: 'sequencerError', message: `Can't revert: ${other.slice(0, 8)} isn't in the current branch` }]);
     writeFileSync(file(), 'dirty\n');
-    assert.deepStrictEqual(await replies({ type: 'revert', hash: [modify.hash] }), [{ type: 'revertError', message: REVERT_DIRTY }]);
+    assert.deepStrictEqual(await replies({ type: 'revert', hash: [modify.hash] }), [{ type: 'sequencerError', message: REVERT_DIRTY }]);
     assert.strictEqual(git('rev-parse', 'HEAD'), tip);
     assert.strictEqual(readFileSync(file(), 'utf8'), 'dirty\n');
     git('checkout', '--', 'file.txt');
@@ -623,9 +626,9 @@ suite('revert', () => {
     const init = await commitNamed('init');
     assert.strictEqual(await stoppedAt(), undefined);
     assert.deepStrictEqual(await replies({ type: 'revert', hash: [init.hash] }), [{ type: 'refresh' }]);
-    assert.strictEqual(await stoppedAt(), init.hash);
+    assert.deepStrictEqual(await stopped(), { op: 'revert', at: init.hash });
     assert.strictEqual(await stoppedAt(), init.hash); // read from disk each time (survives a reload)
-    assert.deepStrictEqual(await replies({ type: 'revertAbort' }), [{ type: 'refresh' }]);
+    assert.deepStrictEqual(await replies({ type: 'sequencerAbort' }), [{ type: 'refresh' }]);
     assert.strictEqual(await stoppedAt(), undefined);
     assert.strictEqual(git('rev-parse', 'HEAD'), tip);
   });
@@ -633,11 +636,11 @@ suite('revert', () => {
   test('a conflict: Continue refuses while unresolved, then commits the revert; resolving in a terminal clears the state', async () => {
     const init = await commitNamed('init');
     await replies({ type: 'revert', hash: [init.hash] });
-    const refused = await replies({ type: 'revertContinue' });
-    assert.strictEqual(refused[0]!.type, 'revertError');
+    const refused = await replies({ type: 'sequencerContinue' });
+    assert.strictEqual(refused[0]!.type, 'sequencerError');
     assert.strictEqual(await stoppedAt(), init.hash);
     git('rm', '-q', 'file.txt');
-    assert.deepStrictEqual(await replies({ type: 'revertContinue' }), [{ type: 'refresh' }]); // GIT_EDITOR=true: no editor waits
+    assert.deepStrictEqual(await replies({ type: 'sequencerContinue' }), [{ type: 'refresh' }]); // GIT_EDITOR=true: no editor waits
     assert.strictEqual(git('log', '-1', '--format=%s'), 'Revert "init"');
     assert.strictEqual(await stoppedAt(), undefined);
     // Resolved elsewhere: a terminal abort clears it on the next first page.
@@ -646,5 +649,59 @@ suite('revert', () => {
     assert.strictEqual(await stoppedAt(), init.hash);
     git('revert', '--abort');
     assert.strictEqual(await stoppedAt(), undefined);
+  });
+
+  /** Commits `files` on top of HEAD, one commit per entry, then resets back to `tip`: commits that aren't in the branch. */
+  const offBranch = (...files: [name: string, content: string][]) => {
+    const made = files.map(([name, content], i) => {
+      writeFileSync(join(repoDir(), name), content);
+      git('add', name);
+      git('commit', '-q', '-m', `pick ${i + 1}`);
+      return git('rev-parse', 'HEAD');
+    });
+    git('reset', '-q', '--hard', tip);
+    return made;
+  };
+
+  test('stagehand.cherryPick creates one commit per commit, oldest first, with the original message', async () => {
+    const [p1, p2] = offBranch(['pick1.txt', '1\n'], ['pick2.txt', '2\n']);
+    assert.strictEqual(await vscode.commands.executeCommand('stagehand.cherryPick', [p2!, p1!]), undefined);
+    assert.deepStrictEqual(git('log', '-3', '--format=%B').split('\n').filter(Boolean), ['pick 2', 'pick 1', git('log', '-1', '--format=%s', tip)]);
+    assert.strictEqual(git('rev-parse', 'HEAD~2'), tip);
+    assert.strictEqual(readFileSync(join(repoDir(), 'pick2.txt'), 'utf8'), '2\n');
+  });
+
+  test('the webview\'s cherryPick message reloads on success; refusals post their reason and change nothing', async () => {
+    const [p1] = offBranch(['pick1.txt', '1\n']);
+    assert.deepStrictEqual(await replies({ type: 'cherryPick', hash: [tip] }),
+      [{ type: 'sequencerError', message: `Can't cherry-pick: ${tip.slice(0, 8)} is already in the current branch` }]);
+    writeFileSync(file(), 'dirty\n');
+    assert.deepStrictEqual(await replies({ type: 'cherryPick', hash: [p1!] }), [{ type: 'sequencerError', message: CHERRY_PICK_DIRTY }]);
+    assert.strictEqual(git('rev-parse', 'HEAD'), tip);
+    assert.strictEqual(readFileSync(file(), 'utf8'), 'dirty\n');
+    git('checkout', '--', 'file.txt');
+    assert.deepStrictEqual(await replies({ type: 'cherryPick', hash: [p1!] }), [{ type: 'refresh' }]);
+    assert.strictEqual(git('log', '-1', '--format=%s'), 'pick 1');
+  });
+
+  test('a cherry-pick conflict: the first-page reply names it; Continue commits it, Abort restores HEAD', async () => {
+    const [p1] = offBranch(['file.txt', 'theirs\n']);
+    writeFileSync(file(), 'ours\n');
+    git('commit', '-q', '-am', 'ours');
+    const ours = git('rev-parse', 'HEAD');
+    assert.deepStrictEqual(await replies({ type: 'cherryPick', hash: [p1!] }), [{ type: 'refresh' }]);
+    assert.deepStrictEqual(await stopped(), { op: 'cherry-pick', at: p1 });
+    assert.deepStrictEqual(await replies({ type: 'sequencerAbort' }), [{ type: 'refresh' }]);
+    assert.strictEqual(await stopped(), undefined);
+    assert.strictEqual(git('rev-parse', 'HEAD'), ours);
+
+    await replies({ type: 'cherryPick', hash: [p1!] });
+    assert.strictEqual((await replies({ type: 'sequencerContinue' }))[0]!.type, 'sequencerError'); // unresolved
+    writeFileSync(file(), 'resolved\n');
+    git('add', 'file.txt');
+    assert.deepStrictEqual(await replies({ type: 'sequencerContinue' }), [{ type: 'refresh' }]);
+    assert.strictEqual(await stopped(), undefined);
+    assert.strictEqual(git('log', '-1', '--format=%s'), 'pick 1');
+    assert.strictEqual(git('rev-parse', 'HEAD~1'), ours);
   });
 });

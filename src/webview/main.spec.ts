@@ -499,7 +499,7 @@ test('right-click on a row offers Checkout, which posts checkout(hash); double-c
   // Right-click an unselected row: it becomes the single selection and the menu offers Checkout.
   await rows.nth(2).click({ button: 'right' });
   await expect(rows.nth(2)).toHaveClass(/selected/);
-  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Checkout', 'Compare with Local', 'Revert Commit']);
+  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Cherry-Pick', 'Checkout', 'Compare with Local', 'Revert Commit']);
   await p.screenshot({ path: 'test-results/screenshots/011-context-menu.png' });
   await menu.getByText('Checkout').click();
   await expect(menu).toHaveCount(0);
@@ -518,7 +518,7 @@ test('right-click on a row offers Checkout, which posts checkout(hash); double-c
   await rows.nth(6).click({ modifiers: ['Shift'] });
   await rows.nth(5).click({ button: 'right' });
   await expect(p.locator('.row.selected')).toHaveCount(2);
-  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Checkout', 'Compare with Local', 'Revert 2 Commits']);
+  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Cherry-Pick 2 Commits', 'Checkout', 'Compare with Local', 'Revert 2 Commits']);
   await expect(menu.getByText('Checkout')).toBeDisabled();
   await menu.getByText('Checkout').dispatchEvent('click');
   expect(await checkouts()).toHaveLength(1);
@@ -895,27 +895,27 @@ test('018: a stopped revert shows a banner with Continue and Abort; it follows e
   await p.goto(page);
   const posted = () => p.evaluate(() => (window as unknown as { posted: { type: string }[] }).posted);
   const send = (m: unknown) => p.evaluate((msg) => window.postMessage(msg, '*'), m);
-  const banner = p.locator('.revert-banner');
-  await send({ type: 'commits', skip: 0, commits, revertStoppedAt: commits[3]!.hash });
+  const banner = p.locator('.sequencer-banner');
+  await send({ type: 'commits', skip: 0, commits, stopped: { op: 'revert', at: commits[3]!.hash } });
   await expect(banner).toContainText(`Revert stopped at ${commits[3]!.hash.slice(0, 8)}: resolve the conflicts, then Continue or Abort`);
   await expect(banner.locator('button')).toHaveText(['Continue', 'Abort']);
   await p.screenshot({ path: 'test-results/screenshots/018-banner.png' });
   await banner.getByText('Continue').click();
   await banner.getByText('Abort').click();
-  expect((await posted()).slice(-2)).toEqual([{ type: 'revertContinue' }, { type: 'revertAbort' }]);
+  expect((await posted()).slice(-2)).toEqual([{ type: 'sequencerContinue' }, { type: 'sequencerAbort' }]);
 
   // A refusal (e.g. unresolved conflicts) shows git's reason; the banner stays.
-  await send({ type: 'revertError', message: 'error: you need to resolve your current index first' });
-  await expect(p.locator('.revert-error')).toHaveText('error: you need to resolve your current index first');
+  await send({ type: 'sequencerError', message: 'error: you need to resolve your current index first' });
+  await expect(p.locator('.sequencer-error')).toHaveText('error: you need to resolve your current index first');
   await expect(banner).toHaveCount(1);
 
-  // The next first-page reply decides: no revertStoppedAt (resolved elsewhere) clears both.
+  // The next first-page reply decides: no `stopped` (resolved elsewhere) clears both.
   await send({ type: 'refresh' });
   await send({ type: 'commits', skip: 0, limit: 1000, commits });
   await expect(banner).toHaveCount(0);
-  await expect(p.locator('.revert-error')).toHaveCount(0);
-  await send({ type: 'revertError', message: "Can't revert: 01abcdef isn't in the current branch" });
-  await expect(p.locator('.revert-error')).toHaveText("Can't revert: 01abcdef isn't in the current branch");
+  await expect(p.locator('.sequencer-error')).toHaveCount(0);
+  await send({ type: 'sequencerError', message: "Can't revert: 01abcdef isn't in the current branch" });
+  await expect(p.locator('.sequencer-error')).toHaveText("Can't revert: 01abcdef isn't in the current branch");
 });
 
 test('018: after a revert the refresh keeps the selection though the reverts push it down', async ({ page: p }) => {
@@ -947,7 +947,7 @@ test('019: menu in Rider order with separators; Copy Revision Number and Cmd/Ctr
   await rows.nth(1).click({ modifiers: ['ControlOrMeta'] });
   await rows.nth(1).click({ button: 'right' });
   const kinds = await menu.locator('> *').evaluateAll((els) => els.map((el) => el.className === 'menu-separator' ? '|' : el.textContent));
-  expect(kinds).toEqual(['Copy Revision Number', '|', 'Checkout', 'Compare with Local', '|', 'Revert 2 Commits']);
+  expect(kinds).toEqual(['Copy Revision Number', 'Cherry-Pick 2 Commits', '|', 'Checkout', 'Compare with Local', '|', 'Revert 2 Commits']);
   await expect(menu.getByText('Checkout')).toBeDisabled();
   await expect(menu.getByText('Copy Revision Number')).toBeEnabled();
   await p.screenshot({ path: 'test-results/screenshots/019-menu.png' });
@@ -987,4 +987,78 @@ test('020: Compare with Local is enabled for one commit and posts its hash; disa
   await expect(item).toBeDisabled();
   await item.dispatchEvent('click');
   expect(await compares()).toHaveLength(1);
+});
+
+test('021: the menu offers Cherry-Pick / Cherry-Pick N Commits after Copy, posting the selected hashes; disabled with a merge; selection kept', async ({ page: p }) => {
+  await p.addInitScript(() => {
+    const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
+    w.posted = [];
+    w.acquireVsCodeApi = () => ({ postMessage: (m: unknown) => w.posted.push(m) });
+  });
+  await p.goto(page);
+  const send = (m: unknown) => p.evaluate((msg) => window.postMessage(msg, '*'), m);
+  const withMerge = commits.map((c, i) => (i === 4 ? { ...c, parents: [commits[5]!.hash, commits[9]!.hash] } : c));
+  await send({ type: 'commits', skip: 0, commits: withMerge });
+  const picks = async () => (await p.evaluate(() => (window as unknown as { posted: { type: string }[] }).posted)).filter((m) => m.type === 'cherryPick');
+  const rows = p.locator('.row');
+  const pickItem = p.locator('.menu .menu-item', { hasText: /^Cherry-Pick/ });
+
+  await rows.nth(1).click({ button: 'right' });
+  await expect(p.locator('.menu .menu-item').nth(1)).toHaveText('Cherry-Pick');
+  await expect(pickItem).toBeEnabled();
+  await pickItem.click();
+  expect(await picks()).toEqual([{ type: 'cherryPick', hash: [commits[1]!.hash] }]);
+
+  // Three selected (clicked out of order): list order; the core picks oldest first.
+  await rows.nth(3).click({ modifiers: ['ControlOrMeta'] });
+  await rows.nth(2).click({ modifiers: ['ControlOrMeta'] });
+  await rows.nth(2).click({ button: 'right' });
+  await expect(pickItem).toHaveText('Cherry-Pick 3 Commits');
+  await p.screenshot({ path: 'test-results/screenshots/021-menu.png' });
+  await pickItem.click();
+  expect((await picks())[1]).toEqual({ type: 'cherryPick', hash: [1, 2, 3].map((i) => commits[i]!.hash) });
+  await expect(p.locator('.row.selected')).toHaveCount(3);
+
+  // The extension answers with refresh; the reload has the picked commits on top and keeps the selection.
+  const picked = [0, 1, 2].map((i) => ({ ...commits[0]!, hash: `cc${i}${'0'.repeat(37)}`, subject: `picked ${i}` }));
+  await send({ type: 'refresh' });
+  await send({ type: 'commits', skip: 0, limit: 1000, commits: [...picked, ...withMerge] });
+  await expect(p.locator('.row.selected .hash')).toHaveText([1, 2, 3].map((i) => commits[i]!.hash.slice(0, 8)));
+
+  // A merge in the selection disables it; clicking posts nothing.
+  await rows.nth(7).click({ modifiers: ['ControlOrMeta'] }); // the merge (index 4), now 3 rows down
+  await rows.nth(7).click({ button: 'right' });
+  await expect(pickItem).toHaveText('Cherry-Pick 4 Commits');
+  await expect(pickItem).toBeDisabled();
+  await pickItem.dispatchEvent('click');
+  await p.keyboard.press('Escape');
+  await rows.nth(7).click();
+  await rows.nth(7).click({ button: 'right' });
+  await expect(pickItem).toHaveText('Cherry-Pick');
+  await expect(pickItem).toBeDisabled();
+  expect(await picks()).toHaveLength(2);
+});
+
+test('021: the banner names the stopped operation (revert or cherry-pick); Continue/Abort post the generic messages', async ({ page: p }) => {
+  await p.addInitScript(() => {
+    const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
+    w.posted = [];
+    w.acquireVsCodeApi = () => ({ postMessage: (m: unknown) => w.posted.push(m) });
+  });
+  await p.goto(page);
+  const posted = () => p.evaluate(() => (window as unknown as { posted: { type: string }[] }).posted);
+  const send = (m: unknown) => p.evaluate((msg) => window.postMessage(msg, '*'), m);
+  const banner = p.locator('.sequencer-banner');
+  await send({ type: 'commits', skip: 0, commits, stopped: { op: 'cherry-pick', at: commits[2]!.hash } });
+  await expect(banner).toContainText(`Cherry-pick stopped at ${commits[2]!.hash.slice(0, 8)}: resolve the conflicts, then Continue or Abort`);
+  await p.screenshot({ path: 'test-results/screenshots/021-banner.png' });
+  await banner.getByText('Continue').click();
+  await banner.getByText('Abort').click();
+  expect((await posted()).slice(-2)).toEqual([{ type: 'sequencerContinue' }, { type: 'sequencerAbort' }]);
+  await send({ type: 'sequencerError', message: 'Commit or stash your changes before cherry-picking' });
+  await expect(p.locator('.sequencer-error')).toHaveText('Commit or stash your changes before cherry-picking');
+
+  await send({ type: 'commits', skip: 0, commits, stopped: { op: 'revert', at: commits[5]!.hash } });
+  await expect(banner).toContainText(`Revert stopped at ${commits[5]!.hash.slice(0, 8)}:`);
+  await expect(p.locator('.sequencer-error')).toHaveCount(0);
 });

@@ -321,69 +321,90 @@ const errText = (err: unknown) => {
 };
 
 export const REVERT_DIRTY = 'Commit or stash your changes before reverting';
+export const CHERRY_PICK_DIRTY = 'Commit or stash your changes before cherry-picking';
+export type SequencerOp = 'revert' | 'cherry-pick';
+export type SequencerState = { op: SequencerOp; at: string };
 
-/** The commit a stopped revert is waiting on: REVERT_HEAD, else the next `revert` line of the sequencer's todo; undefined when no revert is in progress. */
-export async function revertState(cwd: string): Promise<string | undefined> {
+/**
+ * A stopped revert or cherry-pick and the commit it waits on: REVERT_HEAD / CHERRY_PICK_HEAD,
+ * else the next `revert`/`pick` line of the sequencer's todo; undefined when neither is in progress.
+ */
+export async function sequencerState(cwd: string): Promise<SequencerState | undefined> {
   const gitPath = async (p: string) => resolve(cwd, (await git(cwd, ['rev-parse', '--git-path', p])).trim());
-  try {
-    return (await readFile(await gitPath('REVERT_HEAD'), 'utf8')).trim();
-  } catch {
-    // no conflict pending; a sequence may still be stopped (e.g. the conflict was committed by hand)
+  for (const [file, op] of [['REVERT_HEAD', 'revert'], ['CHERRY_PICK_HEAD', 'cherry-pick']] as const) {
+    try {
+      return { op, at: (await readFile(await gitPath(file), 'utf8')).trim() };
+    } catch {
+      // no conflict pending for this one; a sequence may still be stopped (e.g. the conflict was committed by hand)
+    }
   }
   try {
-    return (await readFile(join(await gitPath('sequencer'), 'todo'), 'utf8')).match(/^revert ([0-9a-f]+)/m)?.[1];
+    const m = (await readFile(join(await gitPath('sequencer'), 'todo'), 'utf8')).match(/^(revert|pick) ([0-9a-f]+)/m);
+    return m ? { op: m[1] === 'pick' ? 'cherry-pick' : 'revert', at: m[2]! } : undefined;
   } catch {
     return undefined;
   }
 }
 
 /**
- * Reverts the commits newest first, one revert commit each, git's default message (`git revert --no-edit`).
- * Refuses (throws, nothing touched) when a commit isn't an ancestor of HEAD or tracked files have uncommitted changes.
- * Returns the commit the sequence stopped at on a conflict (earlier reverts stay committed), else undefined.
+ * Runs `git revert --no-edit` (newest first) or `git cherry-pick` (oldest first): one new commit each, git's default message.
+ * Refuses (throws, nothing touched) when a commit isn't (revert) / already is (cherry-pick) an ancestor of HEAD,
+ * or tracked files have uncommitted changes.
+ * Returns the commit the sequence stopped at on a conflict (earlier ones stay committed), else undefined.
  */
-export async function revert(cwd: string, hashes: string[]): Promise<string | undefined> {
+async function sequence(cwd: string, op: SequencerOp, hashes: string[]): Promise<string | undefined> {
   hashes.forEach(hex);
   for (const h of hashes) {
+    let inHead = true;
     try {
       await git(cwd, ['merge-base', '--is-ancestor', h, 'HEAD']);
     } catch (err) {
-      if ((err as { code?: unknown }).code === 1) throw new Error(`Can't revert: ${h.slice(0, 8)} isn't in the current branch`);
-      throw new Error(errText(err));
+      if ((err as { code?: unknown }).code !== 1) throw new Error(errText(err));
+      inHead = false;
     }
+    if (op === 'revert' && !inHead) throw new Error(`Can't revert: ${h.slice(0, 8)} isn't in the current branch`);
+    if (op === 'cherry-pick' && inHead) throw new Error(`Can't cherry-pick: ${h.slice(0, 8)} is already in the current branch`);
   }
-  // ponytail: any tracked change refuses, even one the reverts wouldn't touch; untracked files in the way are left to git.
-  if ((await git(cwd, ['status', '--porcelain', '--untracked-files=no'])).trim()) throw new Error(REVERT_DIRTY);
-  // Newest first: a descendant has more ancestors than its ancestor (commit dates can be skewed). git keeps the given order.
+  // ponytail: any tracked change refuses, even one the commits wouldn't touch; untracked files in the way are left to git.
+  if ((await git(cwd, ['status', '--porcelain', '--untracked-files=no'])).trim()) {
+    throw new Error(op === 'revert' ? REVERT_DIRTY : CHERRY_PICK_DIRTY);
+  }
+  // A descendant has more ancestors than its ancestor (commit dates can be skewed). git keeps the given order.
   const count = new Map(await Promise.all(hashes.map(async (h) => [h, Number(await git(cwd, ['rev-list', '--count', h, '--']))] as const)));
-  const ordered = [...hashes].sort((a, b) => count.get(b)! - count.get(a)!);
+  const ordered = [...hashes].sort((a, b) => (op === 'revert' ? count.get(b)! - count.get(a)! : count.get(a)! - count.get(b)!));
   try {
-    await git(cwd, ['revert', '--no-edit', ...ordered], { LC_ALL: 'C' });
+    await git(cwd, op === 'revert' ? ['revert', '--no-edit', ...ordered] : ['cherry-pick', ...ordered], { LC_ALL: 'C' });
     return undefined;
   } catch (err) {
-    const at = await revertState(cwd);
-    if (at) return at;
+    const state = await sequencerState(cwd);
+    if (state) return state.at;
     throw new Error(errText(err));
   }
 }
 
-/** `git revert --continue` (message accepted as is). Returns where the sequence stopped next, else undefined; throws git's reason if it can't continue. */
-export async function revertContinue(cwd: string): Promise<string | undefined> {
-  const before = await revertState(cwd);
+/** Reverts the commits newest first (see `sequence`). */
+export const revert = (cwd: string, hashes: string[]) => sequence(cwd, 'revert', hashes);
+/** Cherry-picks the commits onto HEAD oldest first, no `-x` (see `sequence`). */
+export const cherryPick = (cwd: string, hashes: string[]) => sequence(cwd, 'cherry-pick', hashes);
+
+/** `git <revert|cherry-pick> --continue` (message accepted as is). Returns where the sequence stopped next, else undefined; throws git's reason if it can't continue. */
+export async function sequencerContinue(cwd: string): Promise<string | undefined> {
+  const before = await sequencerState(cwd);
   try {
-    await git(cwd, ['revert', '--continue'], { GIT_EDITOR: 'true', LC_ALL: 'C' });
+    await git(cwd, [before?.op ?? 'revert', '--continue'], { GIT_EDITOR: 'true', LC_ALL: 'C' });
   } catch (err) {
-    const at = await revertState(cwd);
-    if (at && at !== before) return at; // the next commit conflicted
+    const at = (await sequencerState(cwd))?.at;
+    if (at && at !== before?.at) return at; // the next commit conflicted
     throw new Error(errText(err));
   }
-  return revertState(cwd);
+  return (await sequencerState(cwd))?.at;
 }
 
-/** `git revert --abort`: undoes the whole sequence, back to the HEAD before it started. */
-export async function revertAbort(cwd: string): Promise<void> {
+/** `git <revert|cherry-pick> --abort`: undoes the whole sequence, back to the HEAD before it started. */
+export async function sequencerAbort(cwd: string): Promise<void> {
+  const op = (await sequencerState(cwd))?.op ?? 'revert';
   try {
-    await git(cwd, ['revert', '--abort'], { LC_ALL: 'C' });
+    await git(cwd, [op, '--abort'], { LC_ALL: 'C' });
   } catch (err) {
     throw new Error(errText(err));
   }

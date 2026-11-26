@@ -69,16 +69,20 @@
         "title": "Stagehand: Revert Commits"
       },
       {
-        "command": "stagehand.revertContinue",
-        "title": "Stagehand: Continue Revert"
+        "command": "stagehand.cherryPick",
+        "title": "Stagehand: Cherry-Pick Commits"
       },
       {
-        "command": "stagehand.revertAbort",
-        "title": "Stagehand: Abort Revert"
+        "command": "stagehand.sequencerContinue",
+        "title": "Stagehand: Continue Revert/Cherry-Pick"
       },
       {
-        "command": "stagehand.history.revertState",
-        "title": "Stagehand: Revert State"
+        "command": "stagehand.sequencerAbort",
+        "title": "Stagehand: Abort Revert/Cherry-Pick"
+      },
+      {
+        "command": "stagehand.history.sequencerState",
+        "title": "Stagehand: Revert/Cherry-Pick State"
       }
     ]
   },

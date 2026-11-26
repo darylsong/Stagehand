@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from 'vitest';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { REVERT_DIRTY, revert, revertAbort, revertContinue, revertState } from './git';
+import { REVERT_DIRTY, revert, sequencerAbort, sequencerContinue, sequencerState } from './git';
 import { createTestRepo, type TestRepo } from './testRepo';
 
 let repo: TestRepo;
@@ -23,7 +23,7 @@ it('reverts newest first, one commit each with git\'s message, whatever order th
     'B',
   ]);
   expect((await repo.git('ls-files')).trim()).toBe('a.txt');
-  expect(await revertState(repo.dir)).toBeUndefined();
+  expect(await sequencerState(repo.dir)).toBeUndefined();
 });
 
 it('refuses a commit that isn\'t an ancestor of HEAD, touching nothing', async () => {
@@ -62,14 +62,14 @@ async function conflicting() {
 it('a conflict mid-sequence stops at that commit with earlier reverts committed; continue finishes it', async () => {
   const { b, d } = await conflicting();
   expect(await revert(repo.dir, [b, d])).toBe(b);
-  expect(await revertState(repo.dir)).toBe(b);
+  expect(await sequencerState(repo.dir)).toEqual({ op: 'revert', at: b });
   expect((await log(1))[0]).toBe(`Revert "D"\n\nThis reverts commit ${d}.`);
-  await expect(revertContinue(repo.dir)).rejects.toThrow(); // unresolved conflicts
-  expect(await revertState(repo.dir)).toBe(b);
+  await expect(sequencerContinue(repo.dir)).rejects.toThrow(); // unresolved conflicts
+  expect(await sequencerState(repo.dir)).toEqual({ op: 'revert', at: b });
   await writeFile(join(repo.dir, 'f.txt'), 'resolved\n');
   await repo.git('add', 'f.txt');
-  expect(await revertContinue(repo.dir)).toBeUndefined();
-  expect(await revertState(repo.dir)).toBeUndefined();
+  expect(await sequencerContinue(repo.dir)).toBeUndefined();
+  expect(await sequencerState(repo.dir)).toBeUndefined();
   expect((await log(1))[0]).toMatch(new RegExp(`^Revert "B"\n\nThis reverts commit ${b}\\.`));
   expect(await repo.git('status', '--porcelain')).toBe('');
 });
@@ -77,10 +77,10 @@ it('a conflict mid-sequence stops at that commit with earlier reverts committed;
 it('abort after a mid-sequence conflict restores the original HEAD', async () => {
   const { b, d } = await conflicting();
   await revert(repo.dir, [d, b]);
-  expect(await revertState(repo.dir)).toBe(b);
-  await revertAbort(repo.dir);
+  expect(await sequencerState(repo.dir)).toEqual({ op: 'revert', at: b });
+  await sequencerAbort(repo.dir);
   expect(await head()).toBe(d);
-  expect(await revertState(repo.dir)).toBeUndefined();
+  expect(await sequencerState(repo.dir)).toBeUndefined();
   expect(await repo.git('status', '--porcelain')).toBe('');
 });
 
@@ -90,9 +90,10 @@ it('the banner state comes from the sequencer when REVERT_HEAD is gone (conflict
   await writeFile(join(repo.dir, 'f.txt'), 'resolved\n');
   await repo.git('add', 'f.txt');
   await repo.git('-c', 'core.editor=true', 'commit', '-q', '--no-edit');
-  const at = await revertState(repo.dir); // the todo's first line: still the commit it stopped at
-  expect(at && b.startsWith(at)).toBe(true);
-  expect(await revertContinue(repo.dir)).toBeUndefined();
-  expect(await revertState(repo.dir)).toBeUndefined();
+  const state = await sequencerState(repo.dir); // the todo's first line: still the commit it stopped at
+  expect(state?.op).toBe('revert');
+  expect(state && b.startsWith(state.at)).toBe(true);
+  expect(await sequencerContinue(repo.dir)).toBeUndefined();
+  expect(await sequencerState(repo.dir)).toBeUndefined();
   expect((await log(1))[0]).toBe(`Revert "H"\n\nThis reverts commit ${h}.`);
 });
