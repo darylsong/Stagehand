@@ -57,6 +57,10 @@
         "title": "Stagehand: Checkout Commit"
       },
       {
+        "command": "stagehand.copyRevision",
+        "title": "Stagehand: Copy Revision Number"
+      },
+      {
         "command": "stagehand.revert",
         "title": "Stagehand: Revert Commits"
       },

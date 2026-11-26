@@ -499,7 +499,7 @@ test('right-click on a row offers Checkout, which posts checkout(hash); double-c
   // Right-click an unselected row: it becomes the single selection and the menu offers Checkout.
   await rows.nth(2).click({ button: 'right' });
   await expect(rows.nth(2)).toHaveClass(/selected/);
-  await expect(menu.locator('.menu-item')).toHaveText(['Checkout', 'Revert Commit']);
+  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Checkout', 'Revert Commit']);
   await p.screenshot({ path: 'test-results/screenshots/011-context-menu.png' });
   await menu.getByText('Checkout').click();
   await expect(menu).toHaveCount(0);
@@ -510,14 +510,17 @@ test('right-click on a row offers Checkout, which posts checkout(hash); double-c
   await p.keyboard.press('Escape');
   await expect(menu).toHaveCount(0);
   await rows.nth(2).click({ button: 'right' });
-  await rows.nth(5).click();
+  await rows.nth(9).click(); // clear of the menu, which now covers rows 3-5
   await expect(menu).toHaveCount(0);
+  await rows.nth(5).click();
 
-  // Several selected: no Checkout.
+  // Several selected: Checkout shown but disabled.
   await rows.nth(6).click({ modifiers: ['Shift'] });
   await rows.nth(5).click({ button: 'right' });
   await expect(p.locator('.row.selected')).toHaveCount(2);
-  await expect(menu.locator('.menu-item')).toHaveText(['Revert 2 Commits']);
+  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Checkout', 'Revert 2 Commits']);
+  await expect(menu.getByText('Checkout')).toBeDisabled();
+  await menu.getByText('Checkout').dispatchEvent('click');
   expect(await checkouts()).toHaveLength(1);
 });
 
@@ -925,4 +928,36 @@ test('018: after a revert the refresh keeps the selection though the reverts pus
   await send({ type: 'refresh' });
   await send({ type: 'commits', skip: 0, limit: 1000, commits: [...reverts, ...commits] });
   await expect(p.locator('.row.selected .hash')).toHaveText([commits[1]!.hash.slice(0, 8), commits[2]!.hash.slice(0, 8)]);
+});
+
+test('019: menu in Rider order with separators; Copy Revision Number and Cmd/Ctrl+C post the selected hashes in list order', async ({ page: p }) => {
+  await p.addInitScript(() => {
+    const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
+    w.posted = [];
+    w.acquireVsCodeApi = () => ({ postMessage: (m: unknown) => w.posted.push(m) });
+  });
+  await p.goto(page);
+  await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, commits: c }, '*'), commits);
+  const copies = async () => (await p.evaluate(() => (window as unknown as { posted: { type: string }[] }).posted)).filter((m) => m.type === 'copyRevision');
+  const rows = p.locator('.row');
+  const menu = p.locator('.menu');
+
+  // Two selected, clicked newest-last: menu order, separators, Checkout disabled.
+  await rows.nth(3).click();
+  await rows.nth(1).click({ modifiers: ['ControlOrMeta'] });
+  await rows.nth(1).click({ button: 'right' });
+  const kinds = await menu.locator('> *').evaluateAll((els) => els.map((el) => el.className === 'menu-separator' ? '|' : el.textContent));
+  expect(kinds).toEqual(['Copy Revision Number', '|', 'Checkout', '|', 'Revert 2 Commits']);
+  await expect(menu.getByText('Checkout')).toBeDisabled();
+  await expect(menu.getByText('Copy Revision Number')).toBeEnabled();
+  await p.screenshot({ path: 'test-results/screenshots/019-menu.png' });
+  await menu.getByText('Copy Revision Number').click();
+  await expect(menu).toHaveCount(0);
+  const expected = { type: 'copyRevision', hash: [commits[1]!.hash, commits[3]!.hash] };
+  expect(await copies()).toEqual([expected]);
+
+  // Cmd/Ctrl+C in the focused list does the same.
+  await p.locator('.commits').focus();
+  await p.keyboard.press('ControlOrMeta+c');
+  expect(await copies()).toEqual([expected, expected]);
 });

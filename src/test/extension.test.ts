@@ -262,6 +262,29 @@ suite('webview message handling', () => {
     assert.ok(vscode.window.tabGroups.activeTabGroup.activeTab?.input instanceof vscode.TabInputTextDiff);
   });
 
+  test('stagehand.copyRevision puts the hashes, space-joined, on the clipboard and says Copied in the status bar', async () => {
+    const statusBar = vscode.window.setStatusBarMessage;
+    const shown: unknown[] = [];
+    (vscode.window as { setStatusBarMessage: unknown }).setStatusBarMessage = (...args: unknown[]) => {
+      shown.push(args[0]);
+      return { dispose() {} };
+    };
+    try {
+      await vscode.env.clipboard.writeText('');
+      await vscode.commands.executeCommand('stagehand.copyRevision', ['a'.repeat(40), 'b'.repeat(40)]);
+      assert.strictEqual(await vscode.env.clipboard.readText(), `${'a'.repeat(40)} ${'b'.repeat(40)}`);
+      assert.deepStrictEqual(shown, ['Copied']);
+    } finally {
+      (vscode.window as { setStatusBarMessage: unknown }).setStatusBarMessage = statusBar;
+    }
+  });
+
+  test('a copyRevision message runs stagehand.copyRevision with the hashes', async () => {
+    await vscode.env.clipboard.writeText('');
+    await handleMessage({ type: 'copyRevision', hash: ['c'.repeat(40), 'd'.repeat(40)] }, () => assert.fail('no reply'));
+    assert.strictEqual(await vscode.env.clipboard.readText(), `${'c'.repeat(40)} ${'d'.repeat(40)}`);
+  });
+
   test('copy writes the text to the clipboard', async () => {
     await vscode.env.clipboard.writeText('');
     await handleMessage({ type: 'copy', text: 'abc123' }, () => assert.fail('copy posts no reply'));

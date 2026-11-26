@@ -125,6 +125,8 @@ export async function handleMessage(
         return;
       }
       post({ type: 'refresh' }); // the webview reloads (keeping its selection); the reply carries the banner state
+    } else if (msg.type === 'copyRevision') {
+      await run('stagehand.copyRevision', msg.hash);
     } else if (msg.type === 'copy') {
       await vscode.env.clipboard.writeText(String(msg.text ?? ''));
     }
@@ -196,6 +198,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('stagehand.history.openDiff', openDiff),
     vscode.commands.registerCommand('stagehand.history.checkout', (hash: string, options?: { stashAndCheckout?: boolean }) =>
       checkout(hash, checkoutUi, options)),
+    vscode.commands.registerCommand('stagehand.copyRevision', async (hashes: string[]) => {
+      await vscode.env.clipboard.writeText(hashes.join(' '));
+      vscode.window.setStatusBarMessage('Copied', 2000);
+    }),
     vscode.commands.registerCommand('stagehand.revert', (hashes: string[]) => revert(repoDir(), hashes)),
     vscode.commands.registerCommand('stagehand.revertContinue', () => revertContinue(repoDir())),
     vscode.commands.registerCommand('stagehand.revertAbort', () => revertAbort(repoDir())),

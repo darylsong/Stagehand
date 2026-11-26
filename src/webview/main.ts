@@ -201,7 +201,7 @@ function showSelection(): void {
   if (hashes.length) post({ type: 'changedFiles', hash: hashes });
 }
 
-/** The row context menu: Checkout (one commit selected) and Revert (disabled if a merge is selected). */
+/** The row context menu, in Rider's order: Copy │ Checkout (one commit only) │ Revert (no merges). Inapplicable items are disabled. */
 function showMenu(x: number, y: number): void {
   hideMenu();
   const picked = [...selected].sort((a, b) => a - b).map((i) => commits[i]!);
@@ -224,12 +224,16 @@ function showMenu(x: number, y: number): void {
     }
     return el;
   };
-  if (picked.length === 1) menu.append(item('Checkout', { type: 'checkout', hash: picked[0]!.hash }));
+  const separator = () => Object.assign(document.createElement('div'), { className: 'menu-separator', role: 'separator' });
+  menu.append(item('Copy Revision Number', copyMessage()), separator(),
+    item('Checkout', { type: 'checkout', hash: picked[0]!.hash }, picked.length !== 1), separator());
   menu.append(item(picked.length === 1 ? 'Revert Commit' : `Revert ${picked.length} Commits`,
     { type: 'revert', hash: picked.map((c) => c.hash) }, picked.some((c) => c.parents.length > 1)));
   document.body.append(menu);
   menu.querySelector<HTMLElement>('.menu-item:not(:disabled)')?.focus();
 }
+/** Copy the selected hashes, list order (newest first). */
+const copyMessage = () => ({ type: 'copyRevision', hash: [...selected].sort((a, b) => a - b).map((i) => commits[i]!.hash) });
 const hideMenu = () => document.querySelector('.menu')?.remove();
 
 const selectedHash = () => (selected.size === 1 ? commits[[...selected][0]!]?.hash : undefined);
@@ -466,6 +470,11 @@ function build(root: HTMLElement): HTMLElement {
     showMenu(e.clientX, e.clientY);
   });
   list.addEventListener('keydown', (e) => {
+    if (e.key.toLowerCase() === 'c' && (e.ctrlKey || e.metaKey) && selected.size) {
+      e.preventDefault();
+      post(copyMessage());
+      return;
+    }
     const step = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
     if (!step) return;
     e.preventDefault();
