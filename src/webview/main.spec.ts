@@ -499,7 +499,7 @@ test('right-click on a row offers Checkout, which posts checkout(hash); double-c
   // Right-click an unselected row: it becomes the single selection and the menu offers Checkout.
   await rows.nth(2).click({ button: 'right' });
   await expect(rows.nth(2)).toHaveClass(/selected/);
-  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Cherry-Pick', 'Checkout', 'Compare with Local', 'Revert Commit', 'Edit Commit Message…', 'New Branch…', 'New Tag…', 'Go to Child Commit', 'Go to Parent Commit']);
+  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Cherry-Pick', 'Checkout', 'Compare with Local', 'Reset Current Branch to Here…', 'Revert Commit', 'Edit Commit Message…', 'New Branch…', 'New Tag…', 'Go to Child Commit', 'Go to Parent Commit']);
   await p.screenshot({ path: 'test-results/screenshots/011-context-menu.png' });
   await menu.getByText('Checkout').click();
   await expect(menu).toHaveCount(0);
@@ -518,7 +518,7 @@ test('right-click on a row offers Checkout, which posts checkout(hash); double-c
   await rows.nth(6).click({ modifiers: ['Shift'] });
   await rows.nth(5).click({ button: 'right' });
   await expect(p.locator('.row.selected')).toHaveCount(2);
-  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Cherry-Pick 2 Commits', 'Checkout', 'Compare with Local', 'Revert 2 Commits', 'Edit Commit Message…', 'New Branch…', 'New Tag…', 'Go to Child Commit', 'Go to Parent Commit']);
+  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Cherry-Pick 2 Commits', 'Checkout', 'Compare with Local', 'Reset Current Branch to Here…', 'Revert 2 Commits', 'Edit Commit Message…', 'New Branch…', 'New Tag…', 'Go to Child Commit', 'Go to Parent Commit']);
   await expect(menu.getByText('Checkout')).toBeDisabled();
   await menu.getByText('Checkout').dispatchEvent('click');
   expect(await checkouts()).toHaveLength(1);
@@ -947,7 +947,7 @@ test('019: menu in Rider order with separators; Copy Revision Number and Cmd/Ctr
   await rows.nth(1).click({ modifiers: ['ControlOrMeta'] });
   await rows.nth(1).click({ button: 'right' });
   const kinds = await menu.locator('> *').evaluateAll((els) => els.map((el) => el.className === 'menu-separator' ? '|' : el.textContent));
-  expect(kinds).toEqual(['Copy Revision Number', 'Cherry-Pick 2 Commits', '|', 'Checkout', 'Compare with Local', '|', 'Revert 2 Commits', '|', 'Edit Commit Message…', '|', 'New Branch…', 'New Tag…', '|', 'Go to Child Commit', 'Go to Parent Commit']);
+  expect(kinds).toEqual(['Copy Revision Number', 'Cherry-Pick 2 Commits', '|', 'Checkout', 'Compare with Local', '|', 'Reset Current Branch to Here…', 'Revert 2 Commits', '|', 'Edit Commit Message…', '|', 'New Branch…', 'New Tag…', '|', 'Go to Child Commit', 'Go to Parent Commit']);
   await expect(menu.getByText('Checkout')).toBeDisabled();
   await expect(menu.getByText('Copy Revision Number')).toBeEnabled();
   await p.screenshot({ path: 'test-results/screenshots/019-menu.png' });
@@ -1209,6 +1209,47 @@ test('023: New Branch… / New Tag… are enabled for one commit and post its ha
   await send({ type: 'refresh' });
   await send({ type: 'commits', skip: 0, limit: 1000, commits });
   await expect(error).toHaveCount(0);
+});
+
+test('025: Reset Current Branch to Here… is enabled for one commit (any commit) and posts its hash; disabled for two', async ({ page: p }) => {
+  await p.addInitScript(() => {
+    const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
+    w.posted = [];
+    w.acquireVsCodeApi = () => ({ postMessage: (m: unknown) => w.posted.push(m) });
+  });
+  await p.goto(page);
+  const send = (m: unknown) => p.evaluate((msg) => window.postMessage(msg, '*'), m);
+  // HEAD on row 0; row 2 is not reachable from it (fixture commits have no parents): still enabled.
+  await send({ type: 'commits', skip: 0, commits: commits.map((c, i) => (i === 0 ? { ...c, refs: ['HEAD -> refs/heads/main'] } : c)) });
+  const posted = async () => (await p.evaluate(() => (window as unknown as { posted: { type: string }[] }).posted))
+    .filter((m) => m.type === 'reset');
+  const rows = p.locator('.row');
+  const menu = p.locator('.menu');
+  const reset = menu.getByText('Reset Current Branch to Here…');
+
+  await rows.nth(2).click({ button: 'right' });
+  await expect(reset).toBeEnabled();
+  await p.screenshot({ path: 'test-results/screenshots/025-menu.png' });
+  await reset.click();
+  await expect(menu).toHaveCount(0);
+  expect(await posted()).toEqual([{ type: 'reset', hash: commits[2]!.hash }]);
+
+  await rows.nth(3).click({ modifiers: ['Shift'] });
+  await rows.nth(3).click({ button: 'right' });
+  await expect(p.locator('.row.selected')).toHaveCount(2);
+  await expect(reset).toBeDisabled();
+  await reset.dispatchEvent('click');
+  expect(await posted()).toHaveLength(1);
+  await p.keyboard.press('Escape');
+
+  // After the reset: the refresh keeps the commit selected; a --keep refusal shows git's reason above the list.
+  await rows.nth(2).click();
+  await send({ type: 'sequencerError', message: 'error: Entry \'f.txt\' not uptodate. Cannot merge.' });
+  await expect(p.locator('.sequencer-error')).toHaveText("error: Entry 'f.txt' not uptodate. Cannot merge.");
+  await send({ type: 'refresh' });
+  await send({ type: 'commits', skip: 0, limit: 1000, commits: commits.slice(2) });
+  await expect(p.locator('.row.selected')).toHaveCount(1);
+  await expect(rows.nth(0)).toHaveClass(/selected/);
 });
 
 test('the vertical splitter is drawn above the horizontal one where their grab margins overlap', async ({ page: p }) => {

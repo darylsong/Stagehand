@@ -311,7 +311,7 @@ function showSelection(): void {
   if (hashes.length) post({ type: 'changedFiles', hash: hashes });
 }
 
-/** The row context menu, in Rider's order: Copy, Cherry-Pick (no merges) │ Checkout, Compare with Local (one commit only) │ Revert (no merges) │ Edit Commit Message… (one commit in HEAD) │ New Branch…, New Tag… │ Go to Child / Parent Commit. Inapplicable items are disabled. */
+/** The row context menu, in Rider's order: Copy, Cherry-Pick (no merges) │ Checkout, Compare with Local (one commit only) │ Reset Current Branch to Here… (one commit), Revert (no merges) │ Edit Commit Message… (one commit in HEAD) │ New Branch…, New Tag… │ Go to Child / Parent Commit. Inapplicable items are disabled. */
 function showMenu(list: HTMLElement, x: number, y: number): void {
   hideMenu();
   const picked = [...selected].sort((a, b) => a - b).map((i) => commits[i]!);
@@ -342,7 +342,8 @@ function showMenu(list: HTMLElement, x: number, y: number): void {
     item(picked.length === 1 ? 'Cherry-Pick' : `Cherry-Pick ${picked.length} Commits`, { type: 'cherryPick', hash: hashes }, hasMerge), separator(),
     item('Checkout', { type: 'checkout', hash: picked[0]!.hash }, picked.length !== 1),
     item('Compare with Local', { type: 'compareWithLocal', hash: picked[0]!.hash }, picked.length !== 1), separator());
-  menu.append(item(picked.length === 1 ? 'Revert Commit' : `Revert ${picked.length} Commits`,
+  menu.append(item('Reset Current Branch to Here…', { type: 'reset', hash: picked[0]!.hash }, picked.length !== 1),
+    item(picked.length === 1 ? 'Revert Commit' : `Revert ${picked.length} Commits`,
     { type: 'revert', hash: hashes }, hasMerge), separator(),
     item('Edit Commit Message…', editMessage, !canEdit()), separator(),
     item('New Branch…', { type: 'newBranch', hash: picked[0]!.hash }, picked.length !== 1),

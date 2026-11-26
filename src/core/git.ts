@@ -553,3 +553,15 @@ export async function newTag(cwd: string, hash: string, name: string): Promise<v
     throw new Error(errText(err));
   }
 }
+
+export type ResetMode = 'mixed' | 'soft' | 'keep';
+
+/** `git reset --<mode> <hash>`: moves the current branch (or detached HEAD). Hard is never allowed; git's refusal text is thrown. */
+export async function reset(cwd: string, hash: string, mode: ResetMode): Promise<void> {
+  if (!['mixed', 'soft', 'keep'].includes(mode)) throw new Error(`Not a reset mode: ${mode}`);
+  try {
+    await git(cwd, ['reset', '-q', `--${mode}`, hex(hash), '--']);
+  } catch (err) {
+    throw new Error(errText(err));
+  }
+}

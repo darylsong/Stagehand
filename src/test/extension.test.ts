@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { ChangedFile, Commit, CommitDetails } from '../core/git';
 import { CHERRY_PICK_DIRTY, gitError, REVERT_DIRTY, STASH_KEPT } from '../core/git';
-import { askRefName, checkout, editCommitMessage, handleMessage, historyView, repoDir, watchRepo, webviewHtml } from '../extension/extension';
+import { askRefName, askResetMode, checkout, editCommitMessage, handleMessage, historyView, repoDir, watchRepo, webviewHtml } from '../extension/extension';
 
 // Workspace repo (.vscode-test.mjs): "init" adds file.txt ("old"), "modify" changes it to "new".
 const commitNamed = async (subject: string) =>
@@ -856,5 +856,64 @@ suite('new branch and tag', () => {
     assert.strictEqual(await tag!('it-tag'), "A tag named 'it-tag' already exists");
     assert.strictEqual(await tag!('a b'), 'Not a valid tag name');
     assert.strictEqual(await tag!('integration-branch'), null);
+  });
+});
+
+suite('reset current branch', () => {
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: repoDir(), encoding: 'utf8', stdio: 'pipe' }).trim();
+  const file = () => join(repoDir(), 'file.txt');
+  let tip = '';
+  setup(() => { tip = git('rev-parse', 'HEAD'); });
+  teardown(() => git('reset', '-q', '--hard', tip)); // test cleanup only; the extension never hard-resets
+  const replies = async (msg: Parameters<typeof handleMessage>[0], mode: string | undefined) => {
+    const posted: unknown[] = [];
+    await handleMessage(msg, (r) => posted.push(r), (command: string, ...args: unknown[]) =>
+      command === 'stagehand.history.askResetMode' ? Promise.resolve(mode) : vscode.commands.executeCommand(command, ...args));
+    return posted;
+  };
+
+  test('stagehand.reset moves the branch, keeping the changes unstaged (mixed)', async () => {
+    const init = await commitNamed('init');
+    await vscode.commands.executeCommand('stagehand.reset', init.hash, 'mixed');
+    assert.strictEqual(git('rev-parse', 'refs/heads/integration-branch'), init.hash);
+    assert.strictEqual(git('symbolic-ref', '--short', 'HEAD'), 'integration-branch');
+    assert.strictEqual(git('status', '--porcelain'), 'M file.txt'); // trimmed ' M'
+    assert.strictEqual(readFileSync(file(), 'utf8'), 'new\n');
+  });
+
+  test('stagehand.reset refuses hard', async () => {
+    const init = await commitNamed('init');
+    await assert.rejects(Promise.resolve(vscode.commands.executeCommand('stagehand.reset', init.hash, 'hard')), /Not a reset mode/);
+    assert.strictEqual(git('rev-parse', 'HEAD'), tip);
+  });
+
+  test('the reset message asks for the mode, resets and posts refresh; Cancel does nothing; a --keep refusal posts git\'s reason', async () => {
+    const init = await commitNamed('init');
+    assert.deepStrictEqual(await replies({ type: 'reset', hash: init.hash }, undefined), []);
+    assert.strictEqual(git('rev-parse', 'HEAD'), tip);
+
+    writeFileSync(file(), 'dirty\n');
+    const [reply, ...rest] = await replies({ type: 'reset', hash: init.hash }, 'keep') as { type: string; message: string }[];
+    assert.deepStrictEqual(rest, []);
+    assert.strictEqual(reply!.type, 'sequencerError');
+    assert.match(reply!.message, /file\.txt/);
+    assert.strictEqual(git('rev-parse', 'HEAD'), tip);
+    assert.strictEqual(readFileSync(file(), 'utf8'), 'dirty\n');
+
+    git('checkout', '-q', '--', 'file.txt');
+    assert.deepStrictEqual(await replies({ type: 'reset', hash: init.hash }, 'soft'), [{ type: 'refresh' }]);
+    assert.strictEqual(git('rev-parse', 'refs/heads/integration-branch'), init.hash);
+    assert.strictEqual(git('status', '--porcelain'), 'M  file.txt');
+  });
+
+  test('the mode quick pick offers Mixed (first, the default), Soft, Keep with descriptions; never Hard', async () => {
+    let items: (vscode.QuickPickItem & { mode: string })[] = [];
+    let options: vscode.QuickPickOptions | undefined;
+    const show = (async (i: typeof items, o: vscode.QuickPickOptions) => { items = i; options = o; return i[1]; }) as unknown as typeof vscode.window.showQuickPick;
+    assert.strictEqual(await askResetMode(show), 'soft');
+    assert.deepStrictEqual(items.map((i) => [i.label, i.mode]), [['Mixed', 'mixed'], ['Soft', 'soft'], ['Keep', 'keep']]);
+    assert.ok(items.every((i) => i.description));
+    assert.strictEqual(options?.ignoreFocusOut, true);
+    assert.strictEqual(await askResetMode((async () => undefined) as unknown as typeof vscode.window.showQuickPick), undefined);
   });
 });

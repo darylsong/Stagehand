@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import {
-  branchesContaining, changedFiles, checkout as gitCheckout, checkoutTarget, smartCheckout, STASH_KEPT, type CheckoutRefused, combinedChanges, commitDetails, currentBranch, fileAtRevision, firstParent, gitError, listCommits, localChanges, cherryPick, editMessage, headCommit, isPushed, newBranch, newTag, refNameError, type RefKind, revert, sequencerAbort, sequencerContinue, sequencerState, type ChangedFile, type ErrorKind,
+  branchesContaining, changedFiles, checkout as gitCheckout, checkoutTarget, smartCheckout, STASH_KEPT, type CheckoutRefused, combinedChanges, commitDetails, currentBranch, fileAtRevision, firstParent, gitError, listCommits, localChanges, cherryPick, editMessage, headCommit, isPushed, newBranch, newTag, refNameError, type RefKind, reset, type ResetMode, revert, sequencerAbort, sequencerContinue, sequencerState, type ChangedFile, type ErrorKind,
 } from '../core/git';
 
 /** The first workspace folder's path; throws the 'no-folder' GitError when there is none. */
@@ -126,6 +126,16 @@ export function askRefName(kind: RefKind, show: typeof vscode.window.showInputBo
   });
 }
 
+/** Modal quick pick for `git reset`'s mode, Mixed first (the default). Hard is never offered. `show` is injectable for tests. */
+export async function askResetMode(show: typeof vscode.window.showQuickPick = vscode.window.showQuickPick): Promise<ResetMode | undefined> {
+  const picked = await show([
+    { label: 'Mixed', mode: 'mixed' as const, description: 'Keep changes in the working tree, unstaged' },
+    { label: 'Soft', mode: 'soft' as const, description: 'Keep changes staged' },
+    { label: 'Keep', mode: 'keep' as const, description: 'Update the working tree; refuse if local changes would be lost' },
+  ], { title: 'Reset Current Branch to Here', ignoreFocusOut: true });
+  return picked?.mode;
+}
+
 /** Handles one message from the webview; `post` sends the reply. */
 export async function handleMessage(
   msg: WebviewMessage,
@@ -184,6 +194,16 @@ export async function handleMessage(
         return;
       }
       post({ type: 'refresh' });
+    } else if (msg.type === 'reset') {
+      const mode = await run('stagehand.history.askResetMode');
+      if (!mode) return; // cancelled
+      try {
+        await run('stagehand.reset', msg.hash, mode);
+      } catch (err) {
+        post({ type: 'sequencerError', message: (err as Error).message ?? String(err) }); // e.g. --keep refused: git's reason
+        return;
+      }
+      post({ type: 'refresh' }); // keeps the selection; the commit is HEAD now, so it's still there
     } else if (msg.type === 'compareWithLocal') {
       await run('stagehand.compareWithLocal', msg.hash);
     } else if (msg.type === 'copyRevision') {
@@ -269,6 +289,8 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('stagehand.history.askRefName', (kind: RefKind) => askRefName(kind)),
     vscode.commands.registerCommand('stagehand.newBranch', (hash: string, name: string) => newBranch(repoDir(), hash, name)),
     vscode.commands.registerCommand('stagehand.newTag', (hash: string, name: string) => newTag(repoDir(), hash, name)),
+    vscode.commands.registerCommand('stagehand.history.askResetMode', () => askResetMode()),
+    vscode.commands.registerCommand('stagehand.reset', (hash: string, mode: ResetMode) => reset(repoDir(), hash, mode)),
     vscode.commands.registerCommand('stagehand.revert', (hashes: string[]) => revert(repoDir(), hashes)),
     vscode.commands.registerCommand('stagehand.cherryPick', (hashes: string[]) => cherryPick(repoDir(), hashes)),
     vscode.commands.registerCommand('stagehand.sequencerContinue', () => sequencerContinue(repoDir())),

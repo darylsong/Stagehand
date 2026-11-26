@@ -81,6 +81,14 @@
         "title": "Stagehand: Ask for a Branch/Tag Name"
       },
       {
+        "command": "stagehand.reset",
+        "title": "Stagehand: Reset Current Branch to Here"
+      },
+      {
+        "command": "stagehand.history.askResetMode",
+        "title": "Stagehand: Ask for a Reset Mode"
+      },
+      {
         "command": "stagehand.revert",
         "title": "Stagehand: Revert Commits"
       },
