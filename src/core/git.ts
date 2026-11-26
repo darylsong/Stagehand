@@ -36,12 +36,48 @@ export interface Commit {
 
 const LOG_FIELDS = ['%H', '%P', '%s', '%an', '%ae', '%aI', '%D'];
 
-/** A page of `git log HEAD --branches` in git's default order (newest commit date first). */
+export type ErrorKind = 'no-folder' | 'not-repo' | 'no-commits' | 'git-not-found' | 'git';
+
+/** A failure the view shows as a state. `message` is plain text for the user; for kind 'git' it is git's error text. */
+export class GitError extends Error {
+  constructor(readonly kind: ErrorKind, message: string) {
+    super(message);
+  }
+}
+
+const STATE_TEXT: Record<Exclude<ErrorKind, 'git'>, string> = {
+  'no-folder': 'No folder open',
+  'not-repo': 'Not a git repository',
+  'no-commits': 'Repository has no commits',
+  'git-not-found': 'git not found on PATH',
+};
+export const gitError = (kind: Exclude<ErrorKind, 'git'>) => new GitError(kind, STATE_TEXT[kind]);
+
+/** Turns a failed git call in `cwd` into a GitError, asking git (by exit code, not message text) why it failed. */
+async function classify(cwd: string, err: unknown): Promise<GitError> {
+  const e = err as { code?: unknown; stderr?: string; message?: string };
+  if (e.code === 'ENOENT') return gitError('git-not-found');
+  try {
+    await git(cwd, ['rev-parse', '--verify', '-q', 'HEAD']);
+  } catch (probe) {
+    // rev-parse exits 128 outside a repo and 1 when HEAD doesn't resolve (unborn branch).
+    const code = (probe as { code?: unknown }).code;
+    if (code === 128) return gitError('not-repo');
+    if (code === 1) return gitError('no-commits');
+  }
+  return new GitError('git', e.stderr?.trim() || e.message || String(err));
+}
+
+/** A page of `git log HEAD --branches` in git's default order (newest commit date first). Throws GitError. */
 export async function listCommits(cwd: string, { skip = 0, limit = 1000 } = {}): Promise<Commit[]> {
-  const out = await git(cwd, [
-    'log', '-z', `--format=${LOG_FIELDS.join('%x00')}`, `--skip=${skip}`, `--max-count=${limit}`, 'HEAD', '--branches', '--',
-  ]);
-  return parseLog(out);
+  try {
+    const out = await git(cwd, [
+      'log', '-z', `--format=${LOG_FIELDS.join('%x00')}`, `--skip=${skip}`, `--max-count=${limit}`, 'HEAD', '--branches', '--',
+    ]);
+    return parseLog(out);
+  } catch (err) {
+    throw await classify(cwd, err);
+  }
 }
 
 /** Parses `git log -z` output whose fields are LOG_FIELDS joined by NUL. */

@@ -2,12 +2,13 @@ import * as vscode from 'vscode';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import {
-  changedFiles, commitDetails, currentBranch, fileAtRevision, firstParent, listCommits, type ChangedFile,
+  changedFiles, commitDetails, currentBranch, fileAtRevision, firstParent, gitError, listCommits, type ChangedFile, type ErrorKind,
 } from '../core/git';
 
-function repoDir(): string {
-  const folder = vscode.workspace.workspaceFolders?.[0];
-  if (!folder) throw new Error('No folder open');
+/** The first workspace folder's path; throws the 'no-folder' GitError when there is none. */
+export function repoDir(folders = vscode.workspace.workspaceFolders): string {
+  const folder = folders?.[0];
+  if (!folder) throw gitError('no-folder');
   return folder.uri.fsPath;
 }
 
@@ -53,8 +54,9 @@ export async function handleMessage(
       await vscode.env.clipboard.writeText(String(msg.text ?? ''));
     }
   } catch (err) {
-    // ponytail: raw error text; distinct empty/error states come in issue 002.
-    post({ type: 'error', message: (err as Error).message });
+    // GitError carries its kind; anything else is a plain git failure shown as its text.
+    const kind: ErrorKind = (err as { kind?: ErrorKind }).kind ?? 'git';
+    post({ type: 'error', kind, message: (err as Error).message ?? String(err) });
   }
 }
 

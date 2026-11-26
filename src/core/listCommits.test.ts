@@ -1,5 +1,8 @@
-import { afterEach, expect, it } from 'vitest';
-import { listCommits } from './git';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { GitError, listCommits } from './git';
 import { createTestRepo, type TestRepo } from './testRepo';
 
 let repo: TestRepo;
@@ -29,4 +32,48 @@ it('lists commits from HEAD and other local branches, newest first, with parents
 
   expect((await listCommits(repo.dir, { skip: 1, limit: 2 })).map((x) => x.hash)).toEqual([m, c]);
   expect((await listCommits(repo.dir, { skip: 4, limit: 10 })).map((x) => x.hash)).toEqual([a]);
+});
+
+describe('error kinds', () => {
+  let dir: string | undefined;
+  afterEach(async () => dir && rm(dir, { recursive: true, force: true }));
+
+  it('a directory outside any repo is "not-repo"', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'stagehand-norepo-'));
+    // GIT_CEILING_DIRECTORIES stops git finding a repo above the temp dir.
+    vi.stubEnv('GIT_CEILING_DIRECTORIES', tmpdir());
+    try {
+      await expect(listCommits(dir)).rejects.toMatchObject({ kind: 'not-repo', message: 'Not a git repository' });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('a fresh repo (unborn branch, git log HEAD fails) is "no-commits"', async () => {
+    repo = await createTestRepo();
+    await expect(listCommits(repo.dir)).rejects.toMatchObject({ kind: 'no-commits', message: 'Repository has no commits' });
+  });
+
+  it('git missing from PATH is "git-not-found"', async () => {
+    repo = await createTestRepo();
+    await repo.commit('A');
+    vi.stubEnv('PATH', '');
+    try {
+      await expect(listCommits(repo.dir)).rejects.toMatchObject({ kind: 'git-not-found', message: 'git not found on PATH' });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('any other failure is "git" with git\'s error text', async () => {
+    repo = await createTestRepo();
+    const a = await repo.commit('A');
+    await repo.commit('B');
+    // HEAD still resolves, but walking to the parent fails: a corrupt repo.
+    await rm(join(repo.dir, '.git', 'objects', a.slice(0, 2), a.slice(2)));
+    const err = await listCommits(repo.dir).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GitError);
+    expect(err).toMatchObject({ kind: 'git', message: expect.stringContaining(a) });
+    expect((err as GitError).message).not.toContain('Command failed');
+  });
 });

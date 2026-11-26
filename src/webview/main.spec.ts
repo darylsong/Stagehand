@@ -192,3 +192,23 @@ test('click opens a preview diff, double click pins it, Enter opens the focused 
   await expect(rows.nth(2).locator('.binary')).toHaveText('Binary file changed');
   await p.screenshot({ path: 'test-results/screenshots/007-files.png' });
 });
+
+const states = [
+  { kind: 'no-folder', message: 'No folder open' },
+  { kind: 'not-repo', message: 'Not a git repository' },
+  { kind: 'no-commits', message: 'Repository has no commits' },
+  { kind: 'git-not-found', message: 'git not found on PATH' },
+  { kind: 'git', message: "fatal: unable to read tree 1234abcd\nfatal: bad object HEAD" },
+];
+for (const state of states) {
+  test(`the ${state.kind} state replaces the list with its message`, async ({ page: p }) => {
+    await p.goto(page);
+    await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, commits: c }, '*'), commits);
+    await expect(p.locator('.row')).toHaveCount(25);
+    await p.evaluate((m) => window.postMessage({ type: 'error', ...m }, '*'), state);
+    await expect(p.locator('.row')).toHaveCount(0);
+    await expect(p.locator('#app')).toHaveText(state.message, { useInnerText: true });
+    await expect(p.locator(`.message.state-${state.kind}`)).toBeVisible();
+    await p.screenshot({ path: `test-results/screenshots/002-${state.kind}.png` });
+  });
+}

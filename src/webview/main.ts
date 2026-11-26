@@ -1,10 +1,10 @@
-import type { ChangedFile, Commit, CommitDetails } from '../core/git';
+import type { ChangedFile, Commit, CommitDetails, ErrorKind } from '../core/git';
 
 export type Message =
   | { type: 'commits'; skip: number; commits: Commit[] }
   | { type: 'details'; details: CommitDetails }
   | { type: 'changedFiles'; hash: string; files: ChangedFile[] }
-  | { type: 'error'; message: string };
+  | { type: 'error'; kind: ErrorKind; message: string };
 
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
 // Standalone (browser/Playwright) there is no VS Code API; tests post messages directly.
@@ -95,7 +95,8 @@ function renderDetails(pane: HTMLElement, d: CommitDetails): void {
 
 export function render(root: HTMLElement, msg: Message): void {
   if (msg.type === 'error') {
-    root.replaceChildren(cell('message', msg.message));
+    // The text comes from src/core: a plain state message, or git's error text for kind 'git'.
+    root.replaceChildren(cell(`message state-${msg.kind}`, msg.message));
     return;
   }
   if (msg.type === 'changedFiles') {

@@ -4,7 +4,8 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { ChangedFile, Commit, CommitDetails } from '../core/git';
-import { handleMessage, webviewHtml } from '../extension/extension';
+import { gitError } from '../core/git';
+import { handleMessage, repoDir, webviewHtml } from '../extension/extension';
 
 // Workspace repo (.vscode-test.mjs): "init" adds file.txt ("old"), "modify" changes it to "new".
 const commitNamed = async (subject: string) =>
@@ -108,7 +109,31 @@ suite('webview message handling', () => {
     await handleMessage({ type: 'loadCommits', skip: 0, limit: 1000 }, (r) => replies.push(r), async () => {
       throw new Error('boom');
     });
-    assert.deepStrictEqual(replies, [{ type: 'error', message: 'boom' }]);
+    assert.deepStrictEqual(replies, [{ type: 'error', kind: 'git', message: 'boom' }]);
+  });
+
+  test('in the integration repo, loadCommits through the real command reports no error', async () => {
+    const replies: { type: string }[] = [];
+    await handleMessage({ type: 'loadCommits', skip: 0, limit: 1000 }, (r) => replies.push(r as { type: string }));
+    assert.deepStrictEqual(replies.map((r) => r.type), ['commits']);
+  });
+
+  test('an error kind thrown by a command survives executeCommand and reaches the webview', async () => {
+    const cmd = vscode.commands.registerCommand('stagehand.test.throwNotRepo', () => {
+      throw gitError('not-repo');
+    });
+    try {
+      const replies: unknown[] = [];
+      await handleMessage({ type: 'loadCommits' }, (r) => replies.push(r), (_c, ...args) =>
+        vscode.commands.executeCommand('stagehand.test.throwNotRepo', ...args));
+      assert.deepStrictEqual(replies, [{ type: 'error', kind: 'not-repo', message: 'Not a git repository' }]);
+    } finally {
+      cmd.dispose();
+    }
+  });
+
+  test('with no workspace folder the repo lookup fails with the no-folder kind', () => {
+    assert.throws(() => repoDir([]), { kind: 'no-folder', message: 'No folder open' });
   });
 
   test('commitDetails replies with the details from the command', async () => {
