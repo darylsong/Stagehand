@@ -557,7 +557,7 @@ suite('refresh when the repository changes', function () {
     commitEmpty('view refresh commit');
     git('tag', 'watched-tag');
     await until('the refresh message', () => posted.some((m) => m.type === 'refresh'));
-    // external: the webview keeps its notice through this refresh (023: a failed switch after New Branch).
+    // external: the webview keeps its notice through this refresh (a failed switch after New Branch).
     assert.deepStrictEqual(posted.find((m) => m.type === 'refresh'), { type: 'refresh', external: true });
     // The webview answers refresh with loadCommits; the reply starts with the new commit.
     await receive({ type: 'loadCommits', skip: 0, limit: 1000 });

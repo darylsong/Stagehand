@@ -26,7 +26,7 @@ test('renders a page of commits', async ({ page: p }) => {
   await expect(first.locator('.date')).toHaveText(/^(Today|Yesterday) \d/); // 3 hours ago
   await expect(first.locator('.hash')).toHaveText('00abcdef');
   // Saved for the agent to Read and inspect visually.
-  await p.screenshot({ path: 'test-results/screenshots/001-list.png' });
+  await p.screenshot({ path: 'test-results/screenshots/list.png' });
 });
 
 test('inside VS Code it asks for the first page once on load', async ({ page: p }) => {
@@ -40,7 +40,7 @@ test('inside VS Code it asks for the first page once on load', async ({ page: p 
   await expect(p.locator('.row')).toHaveCount(25);
   const posted = await p.evaluate(() => (window as unknown as { posted: unknown[] }).posted);
   expect(posted).toEqual([{ type: 'loadCommits', skip: 0, limit: 1000 }]);
-  await p.screenshot({ path: 'test-results/screenshots/013-list.png' });
+  await p.screenshot({ path: 'test-results/screenshots/list-initial-load.png' });
 });
 
 test('rows show branch and tag labels as icons + the first name, and mark the HEAD commit, attached or detached', async ({ page: p }) => {
@@ -75,7 +75,7 @@ test('rows show branch and tag labels as icons + the first name, and mark the HE
   });
   const looks = await Promise.all(['.ref-head', '.ref-local', '.ref-remote', '.ref-tag'].map(look));
   expect(new Set(looks).size).toBe(4);
-  await p.screenshot({ path: 'test-results/screenshots/004-labels.png' });
+  await p.screenshot({ path: 'test-results/screenshots/labels.png' });
 });
 
 test.describe('fixed clock, en-US, UTC', () => {
@@ -126,7 +126,7 @@ test('narrow widths: columns line up, labels never cover the subject, author hid
       expect(b.overlap).toBe(false);
       expect(b.rowRight - b.hashRight).toBeGreaterThanOrEqual(12); // clear of an overlay scrollbar
     }
-    await p.screenshot({ path: `test-results/screenshots/014-width-${width}.png` });
+    await p.screenshot({ path: `test-results/screenshots/width-${width}.png` });
   }
   // The list is 60% of the page (the pane takes 40%).
   for (const [width, author, date] of [[1200, true, true], [900, false, true], [700, false, false]] as const) {
@@ -197,7 +197,7 @@ test('click selects a row, Down moves the selection, and the pane shows the post
   await expect(pane.locator('.commit-line')).toContainText('Alice <alice@example.com> on ');
   await expect(pane.locator('.hash-value')).toHaveText(commits[1]!.hash);
   await expect(pane.locator('.parents-value')).toHaveText(`${commits[2]!.hash} ${commits[3]!.hash}`);
-  await p.screenshot({ path: 'test-results/screenshots/005-details.png' });
+  await p.screenshot({ path: 'test-results/screenshots/details-basic.png' });
 
   await pane.locator('button.copy').click();
   expect((await posted()).at(-1)).toEqual({ type: 'copy', text: commits[1]!.hash });
@@ -211,7 +211,7 @@ test('click selects a row, Down moves the selection, and the pane shows the post
   await expect(row(21)).toBeInViewport({ ratio: 1 });
   await p.keyboard.press('ArrowUp');
   await expect(row(20)).toHaveClass(/selected/);
-  await p.screenshot({ path: 'test-results/screenshots/005-scrolled.png' });
+  await p.screenshot({ path: 'test-results/screenshots/scrolled.png' });
 });
 
 test.describe('details pane, en-US, UTC', () => {
@@ -270,7 +270,7 @@ test.describe('details pane, en-US, UTC', () => {
     // Parents and the full-hash Copy button are kept.
     await expect(pane.locator('.parents-value')).toHaveText(commits[2]!.hash);
     await expect(pane.locator('.hash-value')).toHaveText(c1.hash);
-    await p.screenshot({ path: 'test-results/screenshots/015-details.png' });
+    await p.screenshot({ path: 'test-results/screenshots/details.png' });
     await pane.locator('button.copy').click();
     expect((await posted()).at(-1)).toEqual({ type: 'copy', text: c1.hash });
     await branchesEl.locator('.branches-toggle').click();
@@ -318,7 +318,7 @@ test('the selected commit lists its changed files with status letters, rename ar
   await expect(rows.nth(3)).toHaveAttribute('title', 'src/before.ts → src/after.ts');
   await expect(rows.nth(0).locator('.binary')).toHaveText('Binary file changed');
   await expect(p.locator('.details .binary')).toHaveCount(1);
-  await p.screenshot({ path: 'test-results/screenshots/006-files.png' });
+  await p.screenshot({ path: 'test-results/screenshots/files.png' });
 });
 
 test('click opens a preview diff, double click pins it, Enter opens the focused file, binary opens nothing', async ({ page: p }) => {
@@ -364,7 +364,7 @@ test('click opens a preview diff, double click pins it, Enter opens the focused 
   await p.keyboard.press('Enter');
   expect(await posted()).toEqual([]);
   await expect(rows.nth(2).locator('.binary')).toHaveText('Binary file changed');
-  await p.screenshot({ path: 'test-results/screenshots/007-files.png' });
+  await p.screenshot({ path: 'test-results/screenshots/files-diff.png' });
 });
 
 test('Ctrl-click toggles, Shift-click selects a range, Shift+Down extends; the pane shows the count and the combined files', async ({ page: p }) => {
@@ -415,7 +415,7 @@ test('Ctrl-click toggles, Shift-click selects a range, Shift+Down extends; the p
   await expect(p.locator('.details .file')).toHaveCount(0); // reply for an older selection is dropped
   await p.evaluate(([hs, f]) => window.postMessage({ type: 'changedFiles', hash: hs, files: f }, '*'), [h(1, 2, 3), files] as const);
   await expect(p.locator('.details .file .path')).toHaveText(['new.ts', 'README.md']);
-  await p.screenshot({ path: 'test-results/screenshots/009-multi-select.png' });
+  await p.screenshot({ path: 'test-results/screenshots/multi-select.png' });
   await clear();
   await p.locator('.details .file').filter({ hasText: 'README.md' }).click();
   expect(await posted()).toEqual([{ type: 'openDiff', hash: h(1)[0], file: files[0], preview: true }]);
@@ -444,7 +444,7 @@ test('combined results show the non-contiguous banner, the different-branches ba
   await reply({ gap: 2 });
   await expect(banner).toHaveText("Selection isn't contiguous: changes from 2 commits in between are included.");
   await expect(p.locator('.details .file .path')).toHaveText(['README.md']);
-  await p.screenshot({ path: 'test-results/screenshots/010-gap-banner.png' });
+  await p.screenshot({ path: 'test-results/screenshots/gap-banner.png' });
 
   await reply({ gap: 0 });
   await expect(p.locator('.details .file .path')).toHaveText(['README.md']);
@@ -455,7 +455,7 @@ test('combined results show the non-contiguous banner, the different-branches ba
   await expect(banner).toHaveText("Selected commits are on different branches; can't combine");
   await expect(p.locator('.details .file')).toHaveCount(0);
   await expect(p.locator('.row')).toHaveCount(25); // the list stays; only the pane shows the error
-  await p.screenshot({ path: 'test-results/screenshots/010-branches-banner.png' });
+  await p.screenshot({ path: 'test-results/screenshots/branches-banner.png' });
 });
 
 const states = [
@@ -474,7 +474,7 @@ for (const state of states) {
     await expect(p.locator('.row')).toHaveCount(0);
     await expect(p.locator('#app')).toHaveText(state.message, { useInnerText: true });
     await expect(p.locator(`.message.state-${state.kind}`)).toBeVisible();
-    await p.screenshot({ path: `test-results/screenshots/002-${state.kind}.png` });
+    await p.screenshot({ path: `test-results/screenshots/state-${state.kind}.png` });
   });
 }
 
@@ -500,7 +500,7 @@ test('right-click on a row offers Checkout, which posts checkout(hash); double-c
   await rows.nth(2).click({ button: 'right' });
   await expect(rows.nth(2)).toHaveClass(/selected/);
   await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Cherry-Pick', 'Checkout', 'Compare with Local', 'Reset Current Branch to Here…', 'Revert Commit', 'Undo Commit…', 'Edit Commit Message…', 'New Branch…', 'New Tag…', 'Go to Child Commit', 'Go to Parent Commit']);
-  await p.screenshot({ path: 'test-results/screenshots/011-context-menu.png' });
+  await p.screenshot({ path: 'test-results/screenshots/context-menu.png' });
   await menu.getByText('Checkout').click();
   await expect(menu).toHaveCount(0);
   expect(await checkouts()).toEqual([{ type: 'checkout', hash: commits[2]!.hash }]);
@@ -556,7 +556,7 @@ test('a 50k-commit history renders only the visible rows and pages in more at th
   await expect(row(25_000)).toBeInViewport();
   expect(await p.locator('.row').count()).toBeLessThan(200);
   expect(await loads()).toEqual([{ type: 'loadCommits', skip: 0, limit: 1000 }]);
-  await p.screenshot({ path: 'test-results/screenshots/003-mid-scroll.png' });
+  await p.screenshot({ path: 'test-results/screenshots/mid-scroll.png' });
 
   // Scrolling around the end while the request is in flight doesn't send it again.
   for (const [top, visible] of [['bottom', 49_999], [49_900 * 22, 49_900], ['bottom', 49_999]] as const) {
@@ -618,7 +618,7 @@ test('a refresh keeps the selected commits that still exist and the pane on them
   await expect(p.locator('.details .message-body')).toHaveText('body');
   await expect(p.locator('.details .file .path')).toHaveText(['a.txt']);
   expect(await posted()).toEqual([]);
-  await p.screenshot({ path: 'test-results/screenshots/008-refresh-kept.png' });
+  await p.screenshot({ path: 'test-results/screenshots/refresh-kept.png' });
   // Down still moves from the selected row.
   await p.locator('.commits').focus();
   await p.keyboard.press('ArrowDown');
@@ -697,7 +697,7 @@ test('changed files show as a tree: folders expanded, chains merged, counts, col
   const [src, core, git] = [await x(folders.nth(1)), await x(folders.nth(2)), await x(p.locator('.file', { hasText: 'git.ts' }))];
   expect(core).toBeGreaterThan(src);
   expect(git).toBeGreaterThan(core);
-  await p.screenshot({ path: 'test-results/screenshots/016-tree.png' });
+  await p.screenshot({ path: 'test-results/screenshots/tree.png' });
 
   // Click collapses a folder (its whole subtree hides), click again expands; Enter does the same.
   await folders.nth(2).click();
@@ -770,7 +770,7 @@ test('files sit above the details; splitters resize the pane and the files, and 
   expect(after.pane).toBeCloseTo(pane.width + 200, -1);
   expect(after.files).toBeCloseTo(files.height - 100, -1);
   expect(after.list).toBeCloseTo(list.width - 200, -1);
-  await p.screenshot({ path: 'test-results/screenshots/016-splitters.png' });
+  await p.screenshot({ path: 'test-results/screenshots/splitters.png' });
   expect(await p.evaluate(() => JSON.parse(sessionStorage.getItem('state')!))).toEqual({ paneWidth: after.pane, filesHeight: after.files });
 
   // Reload the view: the saved positions come back.
@@ -840,10 +840,10 @@ test('the graph: each row draws its lines and node as inline SVG, colours follow
   ];
   await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, limit: 1000, commits: c }, '*'), wide);
   await expect(p.locator('.row').first().locator('.subject')).toHaveText('Octopus merge');
-  await p.screenshot({ path: 'test-results/screenshots/017-graph.png' });
+  await p.screenshot({ path: 'test-results/screenshots/graph.png' });
 });
 
-test('018: the menu offers Revert Commit / Revert N Commits, posting the selected hashes; disabled with a merge selected', async ({ page: p }) => {
+test('the menu offers Revert Commit / Revert N Commits, posting the selected hashes; disabled with a merge selected', async ({ page: p }) => {
   await p.addInitScript(() => {
     const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
     w.posted = [];
@@ -867,7 +867,7 @@ test('018: the menu offers Revert Commit / Revert N Commits, posting the selecte
   await rows.nth(2).click({ modifiers: ['ControlOrMeta'] });
   await rows.nth(2).click({ button: 'right' });
   await expect(revertItem).toHaveText('Revert 3 Commits');
-  await p.screenshot({ path: 'test-results/screenshots/018-menu.png' });
+  await p.screenshot({ path: 'test-results/screenshots/menu-revert.png' });
   await revertItem.click();
   expect((await reverts())[1]).toEqual({ type: 'revert', hash: [1, 2, 3].map((i) => commits[i]!.hash) });
   await expect(p.locator('.row.selected')).toHaveCount(3); // selection unchanged by the click
@@ -886,7 +886,7 @@ test('018: the menu offers Revert Commit / Revert N Commits, posting the selecte
   expect(await reverts()).toHaveLength(2);
 });
 
-test('018: a stopped revert shows a banner with Continue and Abort; it follows each first-page reply; refusals show their reason', async ({ page: p }) => {
+test('a stopped revert shows a banner with Continue and Abort; it follows each first-page reply; refusals show their reason', async ({ page: p }) => {
   await p.addInitScript(() => {
     const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
     w.posted = [];
@@ -899,7 +899,7 @@ test('018: a stopped revert shows a banner with Continue and Abort; it follows e
   await send({ type: 'commits', skip: 0, commits, stopped: { op: 'revert', at: commits[3]!.hash } });
   await expect(banner).toContainText(`Revert stopped at ${commits[3]!.hash.slice(0, 8)}: resolve the conflicts, then Continue or Abort`);
   await expect(banner.locator('button')).toHaveText(['Continue', 'Abort']);
-  await p.screenshot({ path: 'test-results/screenshots/018-banner.png' });
+  await p.screenshot({ path: 'test-results/screenshots/revert-banner.png' });
   await banner.getByText('Continue').click();
   await banner.getByText('Abort').click();
   expect((await posted()).slice(-2)).toEqual([{ type: 'sequencerContinue' }, { type: 'sequencerAbort' }]);
@@ -918,7 +918,7 @@ test('018: a stopped revert shows a banner with Continue and Abort; it follows e
   await expect(p.locator('.sequencer-error')).toHaveText("Can't revert: 01abcdef isn't in the current branch");
 });
 
-test('018: after a revert the refresh keeps the selection though the reverts push it down', async ({ page: p }) => {
+test('after a revert the refresh keeps the selection though the reverts push it down', async ({ page: p }) => {
   await p.goto(page);
   const send = (m: unknown) => p.evaluate((msg) => window.postMessage(msg, '*'), m);
   await send({ type: 'commits', skip: 0, commits });
@@ -930,7 +930,7 @@ test('018: after a revert the refresh keeps the selection though the reverts pus
   await expect(p.locator('.row.selected .hash')).toHaveText([commits[1]!.hash.slice(0, 8), commits[2]!.hash.slice(0, 8)]);
 });
 
-test('019: menu in Rider order with separators; Copy Revision Number and Cmd/Ctrl+C post the selected hashes in list order', async ({ page: p }) => {
+test('menu in Rider order with separators; Copy Revision Number and Cmd/Ctrl+C post the selected hashes in list order', async ({ page: p }) => {
   await p.addInitScript(() => {
     const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
     w.posted = [];
@@ -950,7 +950,7 @@ test('019: menu in Rider order with separators; Copy Revision Number and Cmd/Ctr
   expect(kinds).toEqual(['Copy Revision Number', 'Cherry-Pick 2 Commits', '|', 'Checkout', 'Compare with Local', '|', 'Reset Current Branch to Here…', 'Revert 2 Commits', 'Undo Commit…', '|', 'Edit Commit Message…', '|', 'New Branch…', 'New Tag…', '|', 'Go to Child Commit', 'Go to Parent Commit']);
   await expect(menu.getByText('Checkout')).toBeDisabled();
   await expect(menu.getByText('Copy Revision Number')).toBeEnabled();
-  await p.screenshot({ path: 'test-results/screenshots/019-menu.png' });
+  await p.screenshot({ path: 'test-results/screenshots/menu-copy.png' });
   await menu.getByText('Copy Revision Number').click();
   await expect(menu).toHaveCount(0);
   const expected = { type: 'copyRevision', hash: [commits[1]!.hash, commits[3]!.hash] };
@@ -962,7 +962,7 @@ test('019: menu in Rider order with separators; Copy Revision Number and Cmd/Ctr
   expect(await copies()).toEqual([expected, expected]);
 });
 
-test('020: Compare with Local is enabled for one commit and posts its hash; disabled for two', async ({ page: p }) => {
+test('Compare with Local is enabled for one commit and posts its hash; disabled for two', async ({ page: p }) => {
   await p.addInitScript(() => {
     const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
     w.posted = [];
@@ -976,7 +976,7 @@ test('020: Compare with Local is enabled for one commit and posts its hash; disa
 
   await rows.nth(2).click({ button: 'right' });
   await expect(item).toBeEnabled();
-  await p.screenshot({ path: 'test-results/screenshots/020-menu.png' });
+  await p.screenshot({ path: 'test-results/screenshots/menu-compare.png' });
   await item.click();
   await expect(p.locator('.menu')).toHaveCount(0);
   expect(await compares()).toEqual([{ type: 'compareWithLocal', hash: commits[2]!.hash }]);
@@ -989,7 +989,7 @@ test('020: Compare with Local is enabled for one commit and posts its hash; disa
   expect(await compares()).toHaveLength(1);
 });
 
-test('021: the menu offers Cherry-Pick / Cherry-Pick N Commits after Copy, posting the selected hashes; disabled with a merge; selection kept', async ({ page: p }) => {
+test('the menu offers Cherry-Pick / Cherry-Pick N Commits after Copy, posting the selected hashes; disabled with a merge; selection kept', async ({ page: p }) => {
   await p.addInitScript(() => {
     const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
     w.posted = [];
@@ -1014,7 +1014,7 @@ test('021: the menu offers Cherry-Pick / Cherry-Pick N Commits after Copy, posti
   await rows.nth(2).click({ modifiers: ['ControlOrMeta'] });
   await rows.nth(2).click({ button: 'right' });
   await expect(pickItem).toHaveText('Cherry-Pick 3 Commits');
-  await p.screenshot({ path: 'test-results/screenshots/021-menu.png' });
+  await p.screenshot({ path: 'test-results/screenshots/menu-cherry-pick.png' });
   await pickItem.click();
   expect((await picks())[1]).toEqual({ type: 'cherryPick', hash: [1, 2, 3].map((i) => commits[i]!.hash) });
   await expect(p.locator('.row.selected')).toHaveCount(3);
@@ -1039,7 +1039,7 @@ test('021: the menu offers Cherry-Pick / Cherry-Pick N Commits after Copy, posti
   expect(await picks()).toHaveLength(2);
 });
 
-test('021: the banner names the stopped operation (revert or cherry-pick); Continue/Abort post the generic messages', async ({ page: p }) => {
+test('the banner names the stopped operation (revert or cherry-pick); Continue/Abort post the generic messages', async ({ page: p }) => {
   await p.addInitScript(() => {
     const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
     w.posted = [];
@@ -1051,7 +1051,7 @@ test('021: the banner names the stopped operation (revert or cherry-pick); Conti
   const banner = p.locator('.sequencer-banner');
   await send({ type: 'commits', skip: 0, commits, stopped: { op: 'cherry-pick', at: commits[2]!.hash } });
   await expect(banner).toContainText(`Cherry-pick stopped at ${commits[2]!.hash.slice(0, 8)}: resolve the conflicts, then Continue or Abort`);
-  await p.screenshot({ path: 'test-results/screenshots/021-banner.png' });
+  await p.screenshot({ path: 'test-results/screenshots/cherry-pick-banner.png' });
   await banner.getByText('Continue').click();
   await banner.getByText('Abort').click();
   expect((await posted()).slice(-2)).toEqual([{ type: 'sequencerContinue' }, { type: 'sequencerAbort' }]);
@@ -1063,7 +1063,7 @@ test('021: the banner names the stopped operation (revert or cherry-pick); Conti
   await expect(p.locator('.sequencer-error')).toHaveCount(0);
 });
 
-test('022: Edit Commit Message… (menu and F2) for one commit in HEAD; the dialog pre-fills, guards Save, and Cmd/Ctrl+Enter / Esc work; the edited commit stays selected', async ({ page: p }) => {
+test('Edit Commit Message… (menu and F2) for one commit in HEAD; the dialog pre-fills, guards Save, and Cmd/Ctrl+Enter / Esc work; the edited commit stays selected', async ({ page: p }) => {
   await p.addInitScript(() => {
     const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
     w.posted = [];
@@ -1132,7 +1132,7 @@ test('022: Edit Commit Message… (menu and F2) for one commit in HEAD; the dial
   await expect(save).toBeDisabled(); // empty
   await box.fill('Reworded\n\nNew body');
   await expect(save).toBeEnabled();
-  await p.screenshot({ path: 'test-results/screenshots/022-dialog.png' });
+  await p.screenshot({ path: 'test-results/screenshots/edit-message-dialog.png' });
   await p.keyboard.press('ControlOrMeta+Enter');
   await expect(dialog).toHaveCount(0);
   expect(await edits()).toEqual([{ type: 'editMessage', hash: commits[2]!.hash, message: 'Reworded\n\nNew body' }]);
@@ -1166,7 +1166,7 @@ test('022: Edit Commit Message… (menu and F2) for one commit in HEAD; the dial
   expect((await posted()).filter((m) => m.type === 'commitDetails').at(-1)).toEqual({ type: 'commitDetails', hash: fresh(2) });
 });
 
-test('023: New Branch… / New Tag… are enabled for one commit and post its hash; disabled for two; a watcher refresh keeps the error', async ({ page: p }) => {
+test('New Branch… / New Tag… are enabled for one commit and post its hash; disabled for two; a watcher refresh keeps the error', async ({ page: p }) => {
   await p.addInitScript(() => {
     const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
     w.posted = [];
@@ -1183,7 +1183,7 @@ test('023: New Branch… / New Tag… are enabled for one commit and post its ha
   await rows.nth(2).click({ button: 'right' });
   await expect(menu.getByText('New Branch…')).toBeEnabled();
   await expect(menu.getByText('New Tag…')).toBeEnabled();
-  await p.screenshot({ path: 'test-results/screenshots/023-menu.png' });
+  await p.screenshot({ path: 'test-results/screenshots/menu-new-ref.png' });
   await menu.getByText('New Branch…').click();
   await expect(menu).toHaveCount(0);
   await rows.nth(2).click({ button: 'right' });
@@ -1211,7 +1211,7 @@ test('023: New Branch… / New Tag… are enabled for one commit and post its ha
   await expect(error).toHaveCount(0);
 });
 
-test('025: Reset Current Branch to Here… is enabled for one commit (any commit) and posts its hash; disabled for two', async ({ page: p }) => {
+test('Reset Current Branch to Here… is enabled for one commit (any commit) and posts its hash; disabled for two', async ({ page: p }) => {
   await p.addInitScript(() => {
     const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
     w.posted = [];
@@ -1229,7 +1229,7 @@ test('025: Reset Current Branch to Here… is enabled for one commit (any commit
 
   await rows.nth(2).click({ button: 'right' });
   await expect(reset).toBeEnabled();
-  await p.screenshot({ path: 'test-results/screenshots/025-menu.png' });
+  await p.screenshot({ path: 'test-results/screenshots/menu-reset.png' });
   await reset.click();
   await expect(menu).toHaveCount(0);
   expect(await posted()).toEqual([{ type: 'reset', hash: commits[2]!.hash }]);
@@ -1252,7 +1252,7 @@ test('025: Reset Current Branch to Here… is enabled for one commit (any commit
   await expect(rows.nth(0)).toHaveClass(/selected/);
 });
 
-test('026: Undo Commit… is enabled only on a non-merge, non-root HEAD row and posts its hash; disabled on a merge HEAD', async ({ page: p }) => {
+test('Undo Commit… is enabled only on a non-merge, non-root HEAD row and posts its hash; disabled on a merge HEAD', async ({ page: p }) => {
   await p.addInitScript(() => {
     const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
     w.posted = [];
@@ -1281,7 +1281,7 @@ test('026: Undo Commit… is enabled only on a non-merge, non-root HEAD row and 
   await rows.nth(0).click();
   await rows.nth(0).click({ button: 'right' });
   await expect(undo).toBeEnabled();
-  await p.screenshot({ path: 'test-results/screenshots/026-menu.png' });
+  await p.screenshot({ path: 'test-results/screenshots/menu-undo.png' });
   await undo.click();
   await expect(menu).toHaveCount(0);
   expect(await posted()).toEqual([{ type: 'undoCommit', hash: commits[0]!.hash }]);
@@ -1317,7 +1317,7 @@ test('the vertical splitter is drawn above the horizontal one where their grab m
   expect(menuAt).toBe(true);
 });
 
-test('024: Go to Child / Parent Commit (menu and ←/→): first parent of a merge, nearest of two children, disabled at the root and with no loaded child', async ({ page: p }) => {
+test('Go to Child / Parent Commit (menu and ←/→): first parent of a merge, nearest of two children, disabled at the root and with no loaded child', async ({ page: p }) => {
   await p.goto(page);
   // 0 C → B; 1 M merges A (first parent) and X; 2 X → B; 3 A → B; 4 B → R; 5 R is the root.
   const h = (i: number) => commits[i]!.hash;
@@ -1342,7 +1342,7 @@ test('024: Go to Child / Parent Commit (menu and ←/→): first parent of a mer
   await rows.nth(4).click({ button: 'right' });
   await expect(menu.getByText('Go to Child Commit')).toBeEnabled();
   await expect(menu.getByText('Go to Parent Commit')).toBeEnabled();
-  await p.screenshot({ path: 'test-results/screenshots/024-menu.png' });
+  await p.screenshot({ path: 'test-results/screenshots/menu-parent-child.png' });
   await menu.getByText('Go to Parent Commit').click();
   expect(await selectedIndex()).toBe('5');
   await rows.nth(5).click({ button: 'right' }); // the root: no parent
@@ -1373,7 +1373,7 @@ test('024: Go to Child / Parent Commit (menu and ←/→): first parent of a mer
   await expect(p.locator('.row.selected')).toHaveCount(2);
 });
 
-test('024: → on a commit whose parent is not loaded yet loads pages until it is, then selects it and scrolls to it', async ({ page: p }) => {
+test('→ on a commit whose parent is not loaded yet loads pages until it is, then selects it and scrolls to it', async ({ page: p }) => {
   await p.addInitScript(() => {
     const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
     w.posted = [];
@@ -1400,10 +1400,10 @@ test('024: → on a commit whose parent is not loaded yet loads pages until it i
   await expect(target).toHaveClass(/selected/);
   await expect(target).toBeInViewport();
   await expect(p.locator('.row.selected')).toHaveCount(1);
-  await p.screenshot({ path: 'test-results/screenshots/024-paged-parent.png' });
+  await p.screenshot({ path: 'test-results/screenshots/paged-parent.png' });
 });
 
-test('024: → far from the end of a long list asks for the next page itself, and again while the parent is still missing; disabled once the log ends without it', async ({ page: p }) => {
+test('→ far from the end of a long list asks for the next page itself, and again while the parent is still missing; disabled once the log ends without it', async ({ page: p }) => {
   await p.addInitScript(() => {
     const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
     w.posted = [];

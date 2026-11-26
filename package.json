@@ -2,6 +2,10 @@
   "name": "stagehand",
   "displayName": "Stagehand",
   "description": "Git history viewer inspired by JetBrains Rider's git log",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/darylsong/stagehand.git"
+  },
   "version": "0.0.1",
   "private": true,
   "engines": {
