@@ -89,6 +89,10 @@
     .menu { position: fixed; z-index: 1; padding: 4px 0; min-width: 120px; color: var(--vscode-menu-foreground, #333); background: var(--vscode-menu-background, #fff); border: 1px solid var(--vscode-menu-border, #ccc); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25); }
     .menu-item { display: block; width: 100%; text-align: left; font: inherit; color: inherit; background: none; border: none; padding: 2px 16px; cursor: pointer; }
     .menu-item:hover, .menu-item:focus { outline: none; color: var(--vscode-menu-selectionForeground, #fff); background: var(--vscode-menu-selectionBackground, #0060c0); }
+    .notice { flex: none; }
+    .notice .banner { margin: 4px 8px; }
+    .banner-button { font: inherit; margin-left: 8px; color: var(--vscode-button-foreground, #fff); background: var(--vscode-button-background, #0060c0); border: none; padding: 1px 8px; cursor: pointer; }
+    .menu-item:disabled { opacity: 0.5; cursor: default; color: inherit; background: none; }
     .message { display: block; padding: 8px; white-space: pre-wrap; color: var(--vscode-descriptionForeground, #717171); }
     .state-git { color: var(--vscode-errorForeground, #a1260d); font-family: var(--vscode-editor-font-family, monospace); }
   </style>

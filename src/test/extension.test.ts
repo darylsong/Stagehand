@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { ChangedFile, Commit, CommitDetails } from '../core/git';
-import { gitError, STASH_KEPT } from '../core/git';
+import { gitError, REVERT_DIRTY, STASH_KEPT } from '../core/git';
 import { checkout, handleMessage, historyView, repoDir, watchRepo, webviewHtml } from '../extension/extension';
 
 // Workspace repo (.vscode-test.mjs): "init" adds file.txt ("old"), "modify" changes it to "new".
@@ -464,5 +464,90 @@ suite('refresh when the repository changes', function () {
     await receive({ type: 'loadCommits', skip: 0, limit: 1000 });
     await until('the commits reply', () => posted.some((m) => m.type === 'commits'));
     assert.strictEqual(posted.find((m) => m.type === 'commits')!.commits![0]!.subject, 'view refresh commit');
+  });
+});
+
+suite('revert', () => {
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: repoDir(), encoding: 'utf8', stdio: 'pipe' }).trim();
+  const file = () => join(repoDir(), 'file.txt');
+  let tip = '';
+  suiteSetup(() => {
+    // revert commits, so the temp repo needs an identity of its own (not the machine's).
+    git('config', 'user.name', 't');
+    git('config', 'user.email', 't@t');
+    git('config', 'commit.gpgsign', 'false');
+  });
+  setup(() => {
+    tip = git('rev-parse', 'HEAD');
+  });
+  teardown(() => {
+    try {
+      git('revert', '--abort');
+    } catch {
+      // no revert in progress
+    }
+    git('reset', '-q', '--hard', tip);
+  });
+  const replies = async (msg: Parameters<typeof handleMessage>[0]) => {
+    const posted: { type: string; message?: string; revertStoppedAt?: string }[] = [];
+    await handleMessage(msg, (r) => posted.push(r as { type: string }));
+    return posted;
+  };
+  const stoppedAt = async () => (await replies({ type: 'loadCommits', skip: 0, limit: 1000 }))[0]!.revertStoppedAt;
+
+  test('stagehand.revert creates one revert commit per commit, newest first, with git\'s message', async () => {
+    const modify = await commitNamed('modify');
+    // Passed oldest first; other must be reverted first.
+    writeFileSync(join(repoDir(), 'other.txt'), 'other\n');
+    git('add', 'other.txt');
+    git('commit', '-q', '-m', 'other');
+    const other = git('rev-parse', 'HEAD');
+    assert.strictEqual(await vscode.commands.executeCommand('stagehand.revert', [modify.hash, other]), undefined);
+    assert.deepStrictEqual(git('log', '-3', '--format=%s').split('\n'), ['Revert "modify"', 'Revert "other"', 'other']);
+    assert.strictEqual(git('log', '-1', '--format=%b'), `This reverts commit ${modify.hash}.`);
+    assert.strictEqual(readFileSync(file(), 'utf8'), 'old\n');
+  });
+
+  test('the webview\'s revert message reloads on success; refusals post their reason and change nothing', async () => {
+    const modify = await commitNamed('modify');
+    const other = git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit-tree', git('rev-parse', 'HEAD^{tree}'), '-p', 'HEAD', '-m', 'elsewhere');
+    assert.deepStrictEqual(await replies({ type: 'revert', hash: [other] }),
+      [{ type: 'revertError', message: `Can't revert: ${other.slice(0, 8)} isn't in the current branch` }]);
+    writeFileSync(file(), 'dirty\n');
+    assert.deepStrictEqual(await replies({ type: 'revert', hash: [modify.hash] }), [{ type: 'revertError', message: REVERT_DIRTY }]);
+    assert.strictEqual(git('rev-parse', 'HEAD'), tip);
+    assert.strictEqual(readFileSync(file(), 'utf8'), 'dirty\n');
+    git('checkout', '--', 'file.txt');
+    assert.deepStrictEqual(await replies({ type: 'revert', hash: [modify.hash] }), [{ type: 'refresh' }]);
+    assert.strictEqual(git('log', '-1', '--format=%s'), 'Revert "modify"');
+  });
+
+  test('a conflict: the first-page reply names the stopping commit until Abort restores HEAD', async () => {
+    const init = await commitNamed('init');
+    assert.strictEqual(await stoppedAt(), undefined);
+    assert.deepStrictEqual(await replies({ type: 'revert', hash: [init.hash] }), [{ type: 'refresh' }]);
+    assert.strictEqual(await stoppedAt(), init.hash);
+    assert.strictEqual(await stoppedAt(), init.hash); // read from disk each time (survives a reload)
+    assert.deepStrictEqual(await replies({ type: 'revertAbort' }), [{ type: 'refresh' }]);
+    assert.strictEqual(await stoppedAt(), undefined);
+    assert.strictEqual(git('rev-parse', 'HEAD'), tip);
+  });
+
+  test('a conflict: Continue refuses while unresolved, then commits the revert; resolving in a terminal clears the state', async () => {
+    const init = await commitNamed('init');
+    await replies({ type: 'revert', hash: [init.hash] });
+    const refused = await replies({ type: 'revertContinue' });
+    assert.strictEqual(refused[0]!.type, 'revertError');
+    assert.strictEqual(await stoppedAt(), init.hash);
+    git('rm', '-q', 'file.txt');
+    assert.deepStrictEqual(await replies({ type: 'revertContinue' }), [{ type: 'refresh' }]); // GIT_EDITOR=true: no editor waits
+    assert.strictEqual(git('log', '-1', '--format=%s'), 'Revert "init"');
+    assert.strictEqual(await stoppedAt(), undefined);
+    // Resolved elsewhere: a terminal abort clears it on the next first page.
+    git('reset', '-q', '--hard', tip);
+    await replies({ type: 'revert', hash: [init.hash] });
+    assert.strictEqual(await stoppedAt(), init.hash);
+    git('revert', '--abort');
+    assert.strictEqual(await stoppedAt(), undefined);
   });
 });

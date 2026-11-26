@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -295,5 +297,79 @@ export async function smartCheckout(cwd: string, target: { branch: string } | { 
   } catch {
     // git keeps the entry whenever pop fails.
     return 'kept in stash';
+  }
+}
+
+const errText = (err: unknown) => {
+  const e = err as { stderr?: string; message?: string };
+  return e.stderr?.trim() || e.message || String(err);
+};
+
+export const REVERT_DIRTY = 'Commit or stash your changes before reverting';
+
+/** The commit a stopped revert is waiting on: REVERT_HEAD, else the next `revert` line of the sequencer's todo; undefined when no revert is in progress. */
+export async function revertState(cwd: string): Promise<string | undefined> {
+  const gitPath = async (p: string) => resolve(cwd, (await git(cwd, ['rev-parse', '--git-path', p])).trim());
+  try {
+    return (await readFile(await gitPath('REVERT_HEAD'), 'utf8')).trim();
+  } catch {
+    // no conflict pending; a sequence may still be stopped (e.g. the conflict was committed by hand)
+  }
+  try {
+    return (await readFile(join(await gitPath('sequencer'), 'todo'), 'utf8')).match(/^revert ([0-9a-f]+)/m)?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Reverts the commits newest first, one revert commit each, git's default message (`git revert --no-edit`).
+ * Refuses (throws, nothing touched) when a commit isn't an ancestor of HEAD or tracked files have uncommitted changes.
+ * Returns the commit the sequence stopped at on a conflict (earlier reverts stay committed), else undefined.
+ */
+export async function revert(cwd: string, hashes: string[]): Promise<string | undefined> {
+  hashes.forEach(hex);
+  for (const h of hashes) {
+    try {
+      await git(cwd, ['merge-base', '--is-ancestor', h, 'HEAD']);
+    } catch (err) {
+      if ((err as { code?: unknown }).code === 1) throw new Error(`Can't revert: ${h.slice(0, 8)} isn't in the current branch`);
+      throw new Error(errText(err));
+    }
+  }
+  // ponytail: any tracked change refuses, even one the reverts wouldn't touch; untracked files in the way are left to git.
+  if ((await git(cwd, ['status', '--porcelain', '--untracked-files=no'])).trim()) throw new Error(REVERT_DIRTY);
+  // Newest first: a descendant has more ancestors than its ancestor (commit dates can be skewed). git keeps the given order.
+  const count = new Map(await Promise.all(hashes.map(async (h) => [h, Number(await git(cwd, ['rev-list', '--count', h, '--']))] as const)));
+  const ordered = [...hashes].sort((a, b) => count.get(b)! - count.get(a)!);
+  try {
+    await git(cwd, ['revert', '--no-edit', ...ordered], { LC_ALL: 'C' });
+    return undefined;
+  } catch (err) {
+    const at = await revertState(cwd);
+    if (at) return at;
+    throw new Error(errText(err));
+  }
+}
+
+/** `git revert --continue` (message accepted as is). Returns where the sequence stopped next, else undefined; throws git's reason if it can't continue. */
+export async function revertContinue(cwd: string): Promise<string | undefined> {
+  const before = await revertState(cwd);
+  try {
+    await git(cwd, ['revert', '--continue'], { GIT_EDITOR: 'true', LC_ALL: 'C' });
+  } catch (err) {
+    const at = await revertState(cwd);
+    if (at && at !== before) return at; // the next commit conflicted
+    throw new Error(errText(err));
+  }
+  return revertState(cwd);
+}
+
+/** `git revert --abort`: undoes the whole sequence, back to the HEAD before it started. */
+export async function revertAbort(cwd: string): Promise<void> {
+  try {
+    await git(cwd, ['revert', '--abort'], { LC_ALL: 'C' });
+  } catch (err) {
+    throw new Error(errText(err));
   }
 }

@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import {
-  branchesContaining, changedFiles, checkout as gitCheckout, checkoutTarget, smartCheckout, STASH_KEPT, type CheckoutRefused, combinedChanges, commitDetails, currentBranch, fileAtRevision, firstParent, gitError, listCommits, type ChangedFile, type ErrorKind,
+  branchesContaining, changedFiles, checkout as gitCheckout, checkoutTarget, smartCheckout, STASH_KEPT, type CheckoutRefused, combinedChanges, commitDetails, currentBranch, fileAtRevision, firstParent, gitError, listCommits, revert, revertAbort, revertContinue, revertState, type ChangedFile, type ErrorKind,
 } from '../core/git';
 
 /** The first workspace folder's path; throws the 'no-folder' GitError when there is none. */
@@ -98,7 +98,9 @@ export async function handleMessage(
       const skip = msg.skip ?? 0;
       const limit = msg.limit ?? 1000;
       const commits = (await run('stagehand.history.loadCommits', { skip, limit })) ?? [];
-      post({ type: 'commits', skip, limit, commits });
+      // A first page (load or refresh) also carries whether a revert is stopped, for the banner.
+      const revertStoppedAt = skip === 0 ? await run('stagehand.history.revertState') : undefined;
+      post({ type: 'commits', skip, limit, commits, ...(revertStoppedAt ? { revertStoppedAt } : {}) });
     } else if (msg.type === 'commitDetails') {
       post({ type: 'details', details: await run('stagehand.history.commitDetails', msg.hash) });
     } else if (msg.type === 'branchesContaining') {
@@ -114,6 +116,15 @@ export async function handleMessage(
       if (await run('stagehand.history.checkout', msg.hash)) {
         post({ type: 'commits', skip: 0, limit: 1000, commits: (await run('stagehand.history.loadCommits', { skip: 0, limit: 1000 })) ?? [] });
       }
+    } else if (msg.type === 'revert' || msg.type === 'revertContinue' || msg.type === 'revertAbort') {
+      try {
+        await run(`stagehand.${msg.type}`, ...(msg.type === 'revert' ? [msg.hash] : []));
+      } catch (err) {
+        // A refusal changed nothing: show the reason, no reload.
+        post({ type: 'revertError', message: (err as Error).message ?? String(err) });
+        return;
+      }
+      post({ type: 'refresh' }); // the webview reloads (keeping its selection); the reply carries the banner state
     } else if (msg.type === 'copy') {
       await vscode.env.clipboard.writeText(String(msg.text ?? ''));
     }
@@ -185,6 +196,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('stagehand.history.openDiff', openDiff),
     vscode.commands.registerCommand('stagehand.history.checkout', (hash: string, options?: { stashAndCheckout?: boolean }) =>
       checkout(hash, checkoutUi, options)),
+    vscode.commands.registerCommand('stagehand.revert', (hashes: string[]) => revert(repoDir(), hashes)),
+    vscode.commands.registerCommand('stagehand.revertContinue', () => revertContinue(repoDir())),
+    vscode.commands.registerCommand('stagehand.revertAbort', () => revertAbort(repoDir())),
+    vscode.commands.registerCommand('stagehand.history.revertState', () => revertState(repoDir())),
     vscode.workspace.registerTextDocumentContentProvider('stagehand', {
       provideTextDocumentContent: (uri) => (uri.query ? fileAtRevision(repoDir(), uri.query, uri.path.slice(1)) : ''),
     }),

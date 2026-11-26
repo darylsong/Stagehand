@@ -55,6 +55,22 @@
       {
         "command": "stagehand.history.checkout",
         "title": "Stagehand: Checkout Commit"
+      },
+      {
+        "command": "stagehand.revert",
+        "title": "Stagehand: Revert Commits"
+      },
+      {
+        "command": "stagehand.revertContinue",
+        "title": "Stagehand: Continue Revert"
+      },
+      {
+        "command": "stagehand.revertAbort",
+        "title": "Stagehand: Abort Revert"
+      },
+      {
+        "command": "stagehand.history.revertState",
+        "title": "Stagehand: Revert State"
       }
     ]
   },

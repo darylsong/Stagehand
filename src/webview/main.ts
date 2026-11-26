@@ -3,7 +3,8 @@ import { fileTree, type TreeNode } from '../core/fileTree';
 import { graph, type GraphRow, type Lanes } from '../core/graph';
 
 export type Message =
-  | { type: 'commits'; skip: number; limit?: number; commits: Commit[] }
+  | { type: 'commits'; skip: number; limit?: number; commits: Commit[]; revertStoppedAt?: string }
+  | { type: 'revertError'; message: string }
   | { type: 'refresh' }
   | { type: 'details'; details: CommitDetails }
   | { type: 'branches'; hash: string; branches: string[] }
@@ -118,6 +119,8 @@ let branches: { hash: string; names: string[] } | undefined; // the latest branc
 let showBranches = false; // the "In N branches" list is expanded
 let loading = true; // the first page is requested on load
 let done = false; // a short page came back: no more commits
+let revertStoppedAt: string | undefined; // a revert sequence is stopped at this commit (from the last first-page reply)
+let revertError: string | undefined; // why the last revert/continue/abort was refused
 
 /** Reloads every loaded commit (at least a page); the skip-0 reply keeps the selection. */
 function refresh(): void {
@@ -198,25 +201,34 @@ function showSelection(): void {
   if (hashes.length) post({ type: 'changedFiles', hash: hashes });
 }
 
-/** The row context menu: Checkout, only when exactly one commit is selected. */
-function showMenu(x: number, y: number, hash: string): void {
+/** The row context menu: Checkout (one commit selected) and Revert (disabled if a merge is selected). */
+function showMenu(x: number, y: number): void {
   hideMenu();
+  const picked = [...selected].sort((a, b) => a - b).map((i) => commits[i]!);
   const menu = document.createElement('div');
   menu.className = 'menu';
   menu.setAttribute('role', 'menu');
   menu.style.left = `${x}px`;
   menu.style.top = `${y}px`;
-  const item = document.createElement('button');
-  item.className = 'menu-item';
-  item.setAttribute('role', 'menuitem');
-  item.textContent = 'Checkout';
-  item.addEventListener('click', () => {
-    hideMenu();
-    post({ type: 'checkout', hash });
-  });
-  menu.append(item);
+  const item = (text: string, msg: unknown, disabled = false) => {
+    const el = document.createElement('button');
+    el.className = 'menu-item';
+    el.setAttribute('role', 'menuitem');
+    el.textContent = text;
+    el.disabled = disabled;
+    if (!disabled) {
+      el.addEventListener('click', () => {
+        hideMenu();
+        post(msg);
+      });
+    }
+    return el;
+  };
+  if (picked.length === 1) menu.append(item('Checkout', { type: 'checkout', hash: picked[0]!.hash }));
+  menu.append(item(picked.length === 1 ? 'Revert Commit' : `Revert ${picked.length} Commits`,
+    { type: 'revert', hash: picked.map((c) => c.hash) }, picked.some((c) => c.parents.length > 1)));
   document.body.append(menu);
-  item.focus();
+  menu.querySelector<HTMLElement>('.menu-item:not(:disabled)')?.focus();
 }
 const hideMenu = () => document.querySelector('.menu')?.remove();
 
@@ -367,6 +379,11 @@ export function render(root: HTMLElement, msg: Message): void {
     if (el) renderBranches(el, msg.hash);
     return;
   }
+  if (msg.type === 'revertError') {
+    revertError = msg.message;
+    renderNotice(root);
+    return;
+  }
   if (msg.type === 'refresh') {
     refresh();
     return;
@@ -395,11 +412,31 @@ export function render(root: HTMLElement, msg: Message): void {
   selected = new Set(before.flatMap((h) => (index.has(h) ? [index.get(h)!] : [])));
   anchor = index.get(anchorHash) ?? -1;
   lead = index.get(leadHash) ?? -1;
+  revertStoppedAt = msg.revertStoppedAt;
+  revertError = undefined;
   const list = existing ?? build(root);
+  renderNotice(root);
   list.querySelector<HTMLElement>('.spacer')!.style.height = `${commits.length * ROW_HEIGHT}px`;
   renderRows(list);
   // Same commits still selected: the pane already shows them. Otherwise point it at what's left (or clear it).
   if (selected.size !== before.length || !existing) showSelection();
+}
+
+/** Above the list: a refused revert's reason, and the stopped-revert banner with Continue and Abort. */
+function renderNotice(root: HTMLElement): void {
+  const el = root.querySelector<HTMLElement>('.notice');
+  if (!el) return;
+  el.replaceChildren(...(revertError ? [cell('banner banner-error revert-error', revertError)] : []));
+  if (!revertStoppedAt) return;
+  const banner = cell('banner revert-banner', `Revert stopped at ${revertStoppedAt.slice(0, 8)}: resolve the conflicts, then Continue or Abort`);
+  for (const [label, type] of [['Continue', 'revertContinue'], ['Abort', 'revertAbort']] as const) {
+    const button = document.createElement('button');
+    button.className = `banner-button ${type}`;
+    button.textContent = label;
+    button.addEventListener('click', () => post({ type }));
+    banner.append(button);
+  }
+  el.append(banner);
 }
 
 /** Builds the list, the refresh button and the details pane. */
@@ -426,8 +463,7 @@ function build(root: HTMLElement): HTMLElement {
     e.preventDefault();
     const i = Number(row.dataset.index);
     if (!selected.has(i)) select(list, i);
-    hideMenu();
-    if (selected.size === 1) showMenu(e.clientX, e.clientY, commits[i]!.hash);
+    showMenu(e.clientX, e.clientY);
   });
   list.addEventListener('keydown', (e) => {
     const step = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
@@ -460,7 +496,9 @@ function build(root: HTMLElement): HTMLElement {
   toolbar.append(button);
   const main = document.createElement('div');
   main.className = 'main';
-  main.append(toolbar, list);
+  const notice = document.createElement('div');
+  notice.className = 'notice';
+  main.append(toolbar, notice, list);
   root.replaceChildren(main, splitter('vertical', (e) => {
     layout.paneWidth = Math.max(150, Math.round(root.getBoundingClientRect().right - e.clientX));
     pane.style.width = `${layout.paneWidth}px`;

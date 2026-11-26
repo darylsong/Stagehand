@@ -499,9 +499,9 @@ test('right-click on a row offers Checkout, which posts checkout(hash); double-c
   // Right-click an unselected row: it becomes the single selection and the menu offers Checkout.
   await rows.nth(2).click({ button: 'right' });
   await expect(rows.nth(2)).toHaveClass(/selected/);
-  await expect(menu.locator('.menu-item')).toHaveText(['Checkout']);
+  await expect(menu.locator('.menu-item')).toHaveText(['Checkout', 'Revert Commit']);
   await p.screenshot({ path: 'test-results/screenshots/011-context-menu.png' });
-  await menu.locator('.menu-item').click();
+  await menu.getByText('Checkout').click();
   await expect(menu).toHaveCount(0);
   expect(await checkouts()).toEqual([{ type: 'checkout', hash: commits[2]!.hash }]);
 
@@ -517,7 +517,7 @@ test('right-click on a row offers Checkout, which posts checkout(hash); double-c
   await rows.nth(6).click({ modifiers: ['Shift'] });
   await rows.nth(5).click({ button: 'right' });
   await expect(p.locator('.row.selected')).toHaveCount(2);
-  await expect(menu).toHaveCount(0);
+  await expect(menu.locator('.menu-item')).toHaveText(['Revert 2 Commits']);
   expect(await checkouts()).toHaveLength(1);
 });
 
@@ -838,4 +838,91 @@ test('the graph: each row draws its lines and node as inline SVG, colours follow
   await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, limit: 1000, commits: c }, '*'), wide);
   await expect(p.locator('.row').first().locator('.subject')).toHaveText('Octopus merge');
   await p.screenshot({ path: 'test-results/screenshots/017-graph.png' });
+});
+
+test('018: the menu offers Revert Commit / Revert N Commits, posting the selected hashes; disabled with a merge selected', async ({ page: p }) => {
+  await p.addInitScript(() => {
+    const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
+    w.posted = [];
+    w.acquireVsCodeApi = () => ({ postMessage: (m: unknown) => w.posted.push(m) });
+  });
+  await p.goto(page);
+  const withMerge = commits.map((c, i) => (i === 4 ? { ...c, parents: [commits[5]!.hash, commits[9]!.hash] } : c));
+  await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, commits: c }, '*'), withMerge);
+  const reverts = async () => (await p.evaluate(() => (window as unknown as { posted: { type: string }[] }).posted)).filter((m) => m.type === 'revert');
+  const rows = p.locator('.row');
+  const revertItem = p.locator('.menu .menu-item', { hasText: /^Revert/ });
+
+  await rows.nth(1).click({ button: 'right' });
+  await expect(revertItem).toHaveText('Revert Commit');
+  await expect(revertItem).toBeEnabled();
+  await revertItem.click();
+  expect(await reverts()).toEqual([{ type: 'revert', hash: [commits[1]!.hash] }]);
+
+  // Three selected (clicked out of order): list order, newest first.
+  await rows.nth(3).click({ modifiers: ['ControlOrMeta'] });
+  await rows.nth(2).click({ modifiers: ['ControlOrMeta'] });
+  await rows.nth(2).click({ button: 'right' });
+  await expect(revertItem).toHaveText('Revert 3 Commits');
+  await p.screenshot({ path: 'test-results/screenshots/018-menu.png' });
+  await revertItem.click();
+  expect((await reverts())[1]).toEqual({ type: 'revert', hash: [1, 2, 3].map((i) => commits[i]!.hash) });
+  await expect(p.locator('.row.selected')).toHaveCount(3); // selection unchanged by the click
+
+  // A merge in the selection disables it; clicking posts nothing.
+  await rows.nth(4).click({ modifiers: ['ControlOrMeta'] });
+  await rows.nth(4).click({ button: 'right' });
+  await expect(revertItem).toHaveText('Revert 4 Commits');
+  await expect(revertItem).toBeDisabled();
+  await revertItem.dispatchEvent('click'); // a disabled button ignores it
+  await p.keyboard.press('Escape');
+  await rows.nth(4).click();
+  await rows.nth(4).click({ button: 'right' });
+  await expect(revertItem).toHaveText('Revert Commit');
+  await expect(revertItem).toBeDisabled();
+  expect(await reverts()).toHaveLength(2);
+});
+
+test('018: a stopped revert shows a banner with Continue and Abort; it follows each first-page reply; refusals show their reason', async ({ page: p }) => {
+  await p.addInitScript(() => {
+    const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
+    w.posted = [];
+    w.acquireVsCodeApi = () => ({ postMessage: (m: unknown) => w.posted.push(m) });
+  });
+  await p.goto(page);
+  const posted = () => p.evaluate(() => (window as unknown as { posted: { type: string }[] }).posted);
+  const send = (m: unknown) => p.evaluate((msg) => window.postMessage(msg, '*'), m);
+  const banner = p.locator('.revert-banner');
+  await send({ type: 'commits', skip: 0, commits, revertStoppedAt: commits[3]!.hash });
+  await expect(banner).toContainText(`Revert stopped at ${commits[3]!.hash.slice(0, 8)}: resolve the conflicts, then Continue or Abort`);
+  await expect(banner.locator('button')).toHaveText(['Continue', 'Abort']);
+  await p.screenshot({ path: 'test-results/screenshots/018-banner.png' });
+  await banner.getByText('Continue').click();
+  await banner.getByText('Abort').click();
+  expect((await posted()).slice(-2)).toEqual([{ type: 'revertContinue' }, { type: 'revertAbort' }]);
+
+  // A refusal (e.g. unresolved conflicts) shows git's reason; the banner stays.
+  await send({ type: 'revertError', message: 'error: you need to resolve your current index first' });
+  await expect(p.locator('.revert-error')).toHaveText('error: you need to resolve your current index first');
+  await expect(banner).toHaveCount(1);
+
+  // The next first-page reply decides: no revertStoppedAt (resolved elsewhere) clears both.
+  await send({ type: 'refresh' });
+  await send({ type: 'commits', skip: 0, limit: 1000, commits });
+  await expect(banner).toHaveCount(0);
+  await expect(p.locator('.revert-error')).toHaveCount(0);
+  await send({ type: 'revertError', message: "Can't revert: 01abcdef isn't in the current branch" });
+  await expect(p.locator('.revert-error')).toHaveText("Can't revert: 01abcdef isn't in the current branch");
+});
+
+test('018: after a revert the refresh keeps the selection though the reverts push it down', async ({ page: p }) => {
+  await p.goto(page);
+  const send = (m: unknown) => p.evaluate((msg) => window.postMessage(msg, '*'), m);
+  await send({ type: 'commits', skip: 0, commits });
+  await p.locator('.row').nth(1).click();
+  await p.locator('.row').nth(2).click({ modifiers: ['Shift'] });
+  const reverts = [0, 1].map((i) => ({ ...commits[0]!, hash: `ee${i}${'0'.repeat(37)}`, subject: `Revert "${i}"` }));
+  await send({ type: 'refresh' });
+  await send({ type: 'commits', skip: 0, limit: 1000, commits: [...reverts, ...commits] });
+  await expect(p.locator('.row.selected .hash')).toHaveText([commits[1]!.hash.slice(0, 8), commits[2]!.hash.slice(0, 8)]);
 });
