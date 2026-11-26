@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import type { Commit } from '../core/git';
+import type { Commit, CommitDetails } from '../core/git';
 import { handleMessage, webviewHtml } from '../extension/extension';
 
 suite('stagehand.showCurrentBranch', () => {
@@ -22,6 +22,15 @@ suite('stagehand.history', () => {
   test('loadCommits returns the init commit', async () => {
     const commits = await vscode.commands.executeCommand<Commit[]>('stagehand.history.loadCommits', { skip: 0, limit: 1000 });
     assert.deepStrictEqual(commits.map((c) => c.subject), ['init']);
+  });
+
+  test('commitDetails returns the init commit with its full message', async () => {
+    const [init] = await vscode.commands.executeCommand<Commit[]>('stagehand.history.loadCommits', { skip: 0, limit: 1 });
+    const details = await vscode.commands.executeCommand<CommitDetails>('stagehand.history.commitDetails', init!.hash);
+    assert.strictEqual(details.subject, 'init');
+    assert.strictEqual(details.message, 'init');
+    assert.strictEqual(details.hash, init!.hash);
+    assert.strictEqual(details.authorEmail, 't@t');
   });
 });
 
@@ -42,6 +51,23 @@ suite('webview message handling', () => {
       throw new Error('boom');
     });
     assert.deepStrictEqual(replies, [{ type: 'error', message: 'boom' }]);
+  });
+
+  test('commitDetails replies with the details from the command', async () => {
+    const [init] = await vscode.commands.executeCommand<Commit[]>('stagehand.history.loadCommits', { skip: 0, limit: 1 });
+    const replies: unknown[] = [];
+    await handleMessage({ type: 'commitDetails', hash: init!.hash }, (r) => replies.push(r));
+    assert.strictEqual(replies.length, 1);
+    const reply = replies[0] as { type: string; details: CommitDetails };
+    assert.strictEqual(reply.type, 'details');
+    assert.strictEqual(reply.details.hash, init!.hash);
+    assert.strictEqual(reply.details.message, 'init');
+  });
+
+  test('copy writes the text to the clipboard', async () => {
+    await vscode.env.clipboard.writeText('');
+    await handleMessage({ type: 'copy', text: 'abc123' }, () => assert.fail('copy posts no reply'));
+    assert.strictEqual(await vscode.env.clipboard.readText(), 'abc123');
   });
 });
 

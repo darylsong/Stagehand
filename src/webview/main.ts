@@ -1,6 +1,14 @@
-import type { Commit } from '../core/git';
+import type { Commit, CommitDetails } from '../core/git';
 
-export type Message = { type: 'commits'; skip: number; commits: Commit[] } | { type: 'error'; message: string };
+export type Message =
+  | { type: 'commits'; skip: number; commits: Commit[] }
+  | { type: 'details'; details: CommitDetails }
+  | { type: 'error'; message: string };
+
+declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
+// Standalone (browser/Playwright) there is no VS Code API; tests post messages directly.
+const vscode = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : undefined;
+const post = (msg: unknown) => vscode?.postMessage(msg);
 
 const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
 const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
@@ -20,31 +28,91 @@ function cell(cls: string, text: string): HTMLElement {
   return el;
 }
 
+let commits: Commit[] = [];
+let selected = -1;
+
+function select(list: HTMLElement, i: number): void {
+  if (i < 0 || i >= commits.length || i === selected) return;
+  list.children[selected]?.classList.remove('selected');
+  list.children[selected]?.setAttribute('aria-selected', 'false');
+  selected = i;
+  const row = list.children[i] as HTMLElement;
+  row.classList.add('selected');
+  row.setAttribute('aria-selected', 'true');
+  row.scrollIntoView({ block: 'nearest' });
+  post({ type: 'commitDetails', hash: commits[i]!.hash });
+}
+
+function field(label: string, value: string): HTMLElement {
+  const el = document.createElement('div');
+  el.className = 'field';
+  el.append(cell('label', label), cell(`value ${label.toLowerCase()}-value`, value));
+  return el;
+}
+
+function renderDetails(pane: HTMLElement, d: CommitDetails): void {
+  const message = document.createElement('pre');
+  message.className = 'full-message';
+  message.textContent = d.message;
+  const hash = field('Hash', d.hash);
+  const copy = document.createElement('button');
+  copy.className = 'copy';
+  copy.textContent = 'Copy';
+  copy.title = 'Copy full hash';
+  copy.addEventListener('click', () => post({ type: 'copy', text: d.hash }));
+  hash.append(copy);
+  pane.replaceChildren(
+    message,
+    field('Author', `${d.authorName} <${d.authorEmail}>`),
+    field('Date', new Date(d.authorDate).toLocaleString()),
+    hash,
+    field('Parents', d.parents.join(' ') || '(none)'),
+  );
+}
+
 export function render(root: HTMLElement, msg: Message): void {
   if (msg.type === 'error') {
     root.replaceChildren(cell('message', msg.message));
     return;
   }
+  if (msg.type === 'details') {
+    const pane = root.querySelector<HTMLElement>('.details');
+    // Ignore late replies for a commit that is no longer selected.
+    if (pane && msg.details.hash === commits[selected]?.hash) renderDetails(pane, msg.details);
+    return;
+  }
+  commits = msg.commits;
+  selected = -1;
   const list = document.createElement('div');
   list.className = 'commits';
-  for (const c of msg.commits) {
+  list.tabIndex = 0;
+  list.setAttribute('role', 'listbox');
+  list.setAttribute('aria-label', 'Commits');
+  for (const [i, c] of commits.entries()) {
     const row = document.createElement('div');
     row.className = 'row';
     row.title = c.hash;
+    row.setAttribute('role', 'option');
     row.append(
       cell('subject', c.subject), cell('author', c.authorName),
       cell('date', relativeDate(c.authorDate)), cell('hash', c.hash.slice(0, 8)),
     );
+    row.addEventListener('click', () => select(list, i));
     list.append(row);
   }
-  root.replaceChildren(list);
+  list.addEventListener('keydown', (e) => {
+    const step = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
+    if (!step) return;
+    e.preventDefault();
+    select(list, selected < 0 ? 0 : selected + step);
+  });
+  const pane = document.createElement('div');
+  pane.className = 'details';
+  root.replaceChildren(list, pane);
 }
-
-declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
 
 const app = document.getElementById('app');
 if (app) {
   window.addEventListener('message', (e: MessageEvent<Message>) => render(app, e.data));
-  // Standalone (browser/Playwright) there is no VS Code API; tests post messages directly.
-  if (typeof acquireVsCodeApi === 'function') acquireVsCodeApi().postMessage({ type: 'loadCommits', skip: 0, limit: 1000 });
+  post({ type: 'loadCommits', skip: 0, limit: 1000 });
 }

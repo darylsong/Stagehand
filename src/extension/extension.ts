@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { currentBranch, listCommits, type Commit } from '../core/git';
+import { commitDetails, currentBranch, listCommits } from '../core/git';
 
 function repoDir(): string {
   const folder = vscode.workspace.workspaceFolders?.[0];
@@ -9,20 +9,28 @@ function repoDir(): string {
   return folder.uri.fsPath;
 }
 
-type Load = (opts: { skip: number; limit: number }) => Promise<Commit[]>;
-const loadFromCommand: Load = async (opts) =>
-  (await vscode.commands.executeCommand<Commit[]>('stagehand.history.loadCommits', opts)) ?? [];
+/** Runs a command; defaults to VS Code's. Injectable so tests can make it fail. */
+type Run = (command: string, ...args: unknown[]) => Thenable<unknown>;
+const runCommand: Run = (command, ...args) => vscode.commands.executeCommand(command, ...args);
 
-/** Handles one message from the webview; `post` sends the reply. `load` is injectable for tests. */
+type WebviewMessage = { type: string; skip?: number; limit?: number; hash?: string; text?: string };
+
+/** Handles one message from the webview; `post` sends the reply. */
 export async function handleMessage(
-  msg: { type: string; skip?: number; limit?: number },
+  msg: WebviewMessage,
   post: (reply: unknown) => unknown,
-  load: Load = loadFromCommand,
+  run: Run = runCommand,
 ): Promise<void> {
-  if (msg.type !== 'loadCommits') return;
-  const skip = msg.skip ?? 0;
   try {
-    post({ type: 'commits', skip, commits: await load({ skip, limit: msg.limit ?? 1000 }) });
+    if (msg.type === 'loadCommits') {
+      const skip = msg.skip ?? 0;
+      const commits = (await run('stagehand.history.loadCommits', { skip, limit: msg.limit ?? 1000 })) ?? [];
+      post({ type: 'commits', skip, commits });
+    } else if (msg.type === 'commitDetails') {
+      post({ type: 'details', details: await run('stagehand.history.commitDetails', msg.hash) });
+    } else if (msg.type === 'copy') {
+      await vscode.env.clipboard.writeText(String(msg.text ?? ''));
+    }
   } catch (err) {
     // ponytail: raw error text; distinct empty/error states come in issue 002.
     post({ type: 'error', message: (err as Error).message });
@@ -48,6 +56,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('stagehand.history.loadCommits', ({ skip = 0, limit = 1000 } = {}) =>
       listCommits(repoDir(), { skip, limit }),
     ),
+    vscode.commands.registerCommand('stagehand.history.commitDetails', (hash: string) => commitDetails(repoDir(), hash)),
     vscode.window.registerWebviewViewProvider('stagehand.history', {
       resolveWebviewView(view) {
         const { webview } = view;

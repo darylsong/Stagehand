@@ -59,3 +59,57 @@ test('the hash column has a fixed width and the standalone page has neutral colo
   });
   expect(body).toEqual({ color: 'rgb(51, 51, 51)', background: 'rgb(255, 255, 255)' });
 });
+
+test('click selects a row, Down moves the selection, and the pane shows the posted details', async ({ page: p }) => {
+  await p.setViewportSize({ width: 900, height: 200 });
+  await p.addInitScript(() => {
+    const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
+    w.posted = [];
+    w.acquireVsCodeApi = () => ({ postMessage: (m: unknown) => w.posted.push(m) });
+  });
+  await p.goto(page);
+  await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, commits: c }, '*'), commits);
+  const posted = () => p.evaluate(() => (window as unknown as { posted: unknown[] }).posted.slice(1));
+  const rows = p.locator('.row');
+
+  await rows.nth(0).click();
+  await expect(rows.nth(0)).toHaveClass(/selected/);
+  await p.keyboard.press('ArrowDown');
+  await expect(rows.nth(1)).toHaveClass(/selected/);
+  await expect(rows.nth(0)).not.toHaveClass(/selected/);
+  await expect(p.locator('.row.selected')).toHaveCount(1);
+  expect(await posted()).toEqual([
+    { type: 'commitDetails', hash: commits[0]!.hash },
+    { type: 'commitDetails', hash: commits[1]!.hash },
+  ]);
+
+  // A late reply for the previously selected commit is ignored.
+  const details = (c: Commit, message: string) => ({
+    hash: c.hash, parents: [commits[2]!.hash, commits[3]!.hash], subject: c.subject,
+    authorName: c.authorName, authorEmail: 'alice@example.com', authorDate: '2024-03-05T14:07:00Z', message,
+  });
+  await p.evaluate((d) => window.postMessage({ type: 'details', details: d }, '*'), details(commits[0]!, 'stale'));
+  await p.evaluate((d) => window.postMessage({ type: 'details', details: d }, '*'),
+    details(commits[1]!, 'Commit number 1\n\nA body that spans\ntwo lines.'));
+  const pane = p.locator('.details');
+  await expect(pane.locator('.full-message')).toHaveText('Commit number 1\n\nA body that spans\ntwo lines.');
+  await expect(pane.locator('.author-value')).toHaveText('Alice <alice@example.com>');
+  // Format in the browser, not in Node: their default locales can differ (they do on a non-en-US machine).
+  const date = await p.evaluate(() => new Date('2024-03-05T14:07:00Z').toLocaleString());
+  await expect(pane.locator('.date-value')).toHaveText(date);
+  await expect(pane.locator('.hash-value')).toHaveText(commits[1]!.hash);
+  await expect(pane.locator('.parents-value')).toHaveText(`${commits[2]!.hash} ${commits[3]!.hash}`);
+  await p.screenshot({ path: 'test-results/screenshots/005-details.png' });
+
+  await pane.locator('button.copy').click();
+  expect((await posted()).at(-1)).toEqual({ type: 'copy', text: commits[1]!.hash });
+
+  // Moving past the bottom of the viewport keeps the selection visible; Up moves back.
+  await rows.nth(1).click();
+  for (let i = 0; i < 20; i++) await p.keyboard.press('ArrowDown');
+  await expect(rows.nth(21)).toHaveClass(/selected/);
+  await expect(rows.nth(21)).toBeInViewport({ ratio: 1 });
+  await p.keyboard.press('ArrowUp');
+  await expect(rows.nth(20)).toHaveClass(/selected/);
+  await p.screenshot({ path: 'test-results/screenshots/005-scrolled.png' });
+});

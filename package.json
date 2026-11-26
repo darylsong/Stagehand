@@ -35,6 +35,10 @@
       {
         "command": "stagehand.history.loadCommits",
         "title": "Stagehand: Load Commits"
+      },
+      {
+        "command": "stagehand.history.commitDetails",
+        "title": "Stagehand: Commit Details"
       }
     ]
   },

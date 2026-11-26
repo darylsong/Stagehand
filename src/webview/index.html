@@ -6,13 +6,24 @@
   <style>
     /* Fallbacks are for the standalone page (browser/Playwright); inside VS Code the theme variables win. */
     body { font-family: var(--vscode-font-family, system-ui, sans-serif); font-size: var(--vscode-font-size, 13px); color: var(--vscode-foreground, #333); background: var(--vscode-panel-background, #fff); margin: 0; padding: 0; }
+    #app { display: flex; height: 100vh; }
+    .commits { flex: 1; min-width: 0; overflow: auto; outline: none; }
+    .details { width: 40%; overflow: auto; padding: 8px; border-left: 1px solid var(--vscode-panel-border, #ccc); }
     .row { display: flex; gap: 12px; padding: 0 8px; line-height: 22px; white-space: nowrap; }
     .row:hover { background: var(--vscode-list-hoverBackground, #f0f0f0); }
+    .row.selected { background: var(--vscode-list-inactiveSelectionBackground, #e4e6f1); }
+    .commits:focus .row.selected { background: var(--vscode-list-activeSelectionBackground, #0060c0); color: var(--vscode-list-activeSelectionForeground, #fff); }
+    .commits:focus .row.selected > * { color: inherit; }
     .subject { flex: 1; overflow: hidden; text-overflow: ellipsis; }
     .author, .date, .hash { color: var(--vscode-descriptionForeground, #717171); }
     .author { width: 140px; overflow: hidden; text-overflow: ellipsis; }
     .date { width: 110px; }
     .hash { flex: none; width: 8ch; font-family: var(--vscode-editor-font-family, monospace); }
+    .full-message { margin: 0 0 8px; white-space: pre-wrap; font-family: inherit; }
+    .field { display: flex; gap: 8px; align-items: baseline; line-height: 22px; }
+    .label { flex: none; width: 60px; color: var(--vscode-descriptionForeground, #717171); }
+    .hash-value, .parents-value { font-family: var(--vscode-editor-font-family, monospace); word-break: break-all; }
+    .copy { font: inherit; color: var(--vscode-button-foreground, #fff); background: var(--vscode-button-background, #0060c0); border: none; padding: 1px 8px; cursor: pointer; }
     .message { display: block; padding: 8px; color: var(--vscode-errorForeground, #a1260d); }
   </style>
 </head>

@@ -55,3 +55,21 @@ export function parseLog(out: string): Commit[] {
   }
   return commits;
 }
+
+export interface CommitDetails extends Omit<Commit, 'refs'> {
+  /** Full raw message: subject, blank line, body. */
+  message: string;
+}
+
+/** One commit with its full message. `hash` must be a (possibly abbreviated) hex object name. */
+export async function commitDetails(cwd: string, hash: string): Promise<CommitDetails> {
+  // Trust boundary: the hash comes from the webview; refuse anything git could read as an option or rev expression.
+  if (!/^[0-9a-f]{4,64}$/i.test(hash)) throw new Error(`Not a commit hash: ${hash}`);
+  const out = await git(cwd, ['show', '-s', '--format=%H%x00%P%x00%s%x00%an%x00%ae%x00%aI%x00%B', hash, '--']);
+  const [h = '', parents = '', subject = '', authorName = '', authorEmail = '', authorDate = '', ...rest] = out.split('\0');
+  return {
+    hash: h, subject, authorName, authorEmail, authorDate,
+    parents: parents ? parents.split(' ') : [],
+    message: rest.join('\0').replace(/\n+$/, ''),
+  };
+}
