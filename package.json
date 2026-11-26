@@ -1,6 +1,7 @@
 {
   "name": "stagehand",
   "displayName": "Stagehand",
+  "publisher": "darylsong",
   "description": "Git history viewer inspired by JetBrains Rider's git log",
   "repository": {
     "type": "git",
