@@ -1,11 +1,11 @@
 import * as assert from 'node:assert';
 import * as vscode from 'vscode';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { ChangedFile, Commit, CommitDetails } from '../core/git';
-import { gitError } from '../core/git';
+import { gitError, STASH_KEPT } from '../core/git';
 import { checkout, handleMessage, repoDir, webviewHtml } from '../extension/extension';
 
 // Workspace repo (.vscode-test.mjs): "init" adds file.txt ("old"), "modify" changes it to "new".
@@ -275,7 +275,7 @@ suite('checkout', () => {
     git('branch', 'other-branch', modify.hash);
     try {
       const offered: string[][] = [];
-      const ui = (answer: string | undefined) => ({ pick: async (b: string[]) => (offered.push(b), answer), error: () => assert.fail('no error') });
+      const ui = (answer: string | undefined) => ({ pick: async (b: string[]) => (offered.push(b), answer), error: () => assert.fail('no error'), confirmStash: async () => assert.fail('no modal'), warn: () => assert.fail('no warning') });
       assert.strictEqual(await checkout(modify.hash, ui(undefined)), false);
       assert.strictEqual(await branch(), 'integration-branch');
       assert.strictEqual(await checkout(modify.hash, ui('other-branch')), true);
@@ -287,20 +287,76 @@ suite('checkout', () => {
     }
   });
 
-  test('a refused checkout shows git\'s reason and changes nothing', async () => {
+  const noUi = { pick: async () => assert.fail('no pick'), confirmStash: async () => assert.fail('no modal'), error: () => assert.fail('no error'), warn: () => assert.fail('no warning') };
+
+  test('a checkout refused for another reason shows git\'s reason and changes nothing', async () => {
+    const [init, modify] = [await commitNamed('init'), await commitNamed('modify')];
+    const lock = join(repoDir(), '.git', 'index.lock');
+    writeFileSync(lock, '');
+    try {
+      const errors: string[] = [];
+      assert.strictEqual(await checkout(init.hash, { ...noUi, error: (m) => errors.push(m) }), false);
+      assert.strictEqual(errors.length, 1);
+      assert.match(errors[0]!, /index\.lock/);
+      assert.strictEqual(git('rev-parse', 'HEAD'), modify.hash);
+    } finally {
+      rmSync(lock);
+    }
+  });
+
+  test('uncommitted changes in the way open the Stash & Checkout modal; Cancel changes nothing', async () => {
     const [init, modify] = [await commitNamed('init'), await commitNamed('modify')];
     const file = join(repoDir(), 'file.txt');
     writeFileSync(file, 'dirty\n');
     try {
-      const errors: string[] = [];
-      assert.strictEqual(await checkout(init.hash, { pick: async () => assert.fail('no pick'), error: (m) => errors.push(m) }), false);
-      assert.strictEqual(errors.length, 1);
-      assert.match(errors[0]!, /file\.txt/);
+      const reasons: string[] = [];
+      assert.strictEqual(await checkout(init.hash, { ...noUi, confirmStash: async (r) => (reasons.push(r), false) }), false);
+      assert.strictEqual(reasons.length, 1);
+      assert.match(reasons[0]!, /file\.txt/);
       assert.strictEqual(git('rev-parse', 'HEAD'), modify.hash);
       assert.strictEqual(await branch(), 'integration-branch');
       assert.strictEqual(readFileSync(file, 'utf8'), 'dirty\n');
+      assert.strictEqual(git('stash', 'list'), '');
     } finally {
       git('checkout', '-q', '--', 'file.txt');
+    }
+  });
+
+  test('choosing Stash & Checkout moves HEAD; conflicting changes are kept in the stash and the user is told', async () => {
+    const init = await commitNamed('init');
+    const file = join(repoDir(), 'file.txt');
+    writeFileSync(file, 'dirty\n');
+    try {
+      const warnings: string[] = [];
+      assert.strictEqual(await checkout(init.hash, { ...noUi, confirmStash: async () => true, warn: (m) => warnings.push(m) }), true);
+      assert.strictEqual(git('rev-parse', 'HEAD'), init.hash);
+      assert.deepStrictEqual(warnings, [STASH_KEPT]);
+      assert.strictEqual(git('show', 'stash@{0}:file.txt'), 'dirty');
+    } finally {
+      git('reset', '-q', '--hard');
+      git('stash', 'drop', '-q');
+      git('checkout', '-q', 'integration-branch');
+    }
+  });
+
+  test('the checkout command with stashAndCheckout: true skips the modal; HEAD moves and the change survives', async () => {
+    const init = await commitNamed('init');
+    const file = join(repoDir(), 'file.txt');
+    const untracked = join(repoDir(), 'untracked.txt');
+    writeFileSync(file, 'dirty\n');
+    writeFileSync(untracked, 'mine\n');
+    try {
+      assert.strictEqual(await vscode.commands.executeCommand('stagehand.history.checkout', init.hash, { stashAndCheckout: true }), true);
+      assert.strictEqual(git('rev-parse', 'HEAD'), init.hash);
+      // file.txt conflicts with init, so the change is kept in the stash; the untracked file comes back.
+      assert.strictEqual(git('show', 'stash@{0}:file.txt'), 'dirty');
+      assert.match(readFileSync(file, 'utf8'), /dirty/);
+      assert.strictEqual(readFileSync(untracked, 'utf8'), 'mine\n');
+    } finally {
+      git('reset', '-q', '--hard');
+      git('stash', 'drop', '-q');
+      rmSync(untracked, { force: true });
+      git('checkout', '-q', 'integration-branch');
     }
   });
 

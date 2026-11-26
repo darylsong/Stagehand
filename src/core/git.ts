@@ -238,13 +238,51 @@ export async function checkoutTarget(cwd: string, hash: string): Promise<string[
   return branches.length ? branches : hash;
 }
 
-/** Plain `git checkout` (never forced) of a branch, or of a hash with HEAD detached. Throws git's reason if it refuses. */
+/** A refused checkout. `localChanges`: git refused because uncommitted (or untracked) files would be overwritten. */
+export class CheckoutRefused extends Error {
+  constructor(message: string, readonly localChanges: boolean) {
+    super(message);
+  }
+}
+
+/** Plain `git checkout` (never forced) of a branch, or of a hash with HEAD detached. Throws CheckoutRefused with git's reason if it refuses. */
 export async function checkout(cwd: string, target: { branch: string } | { detach: string }): Promise<void> {
   try {
-    if ('branch' in target) await git(cwd, ['checkout', '-q', target.branch, '--']);
-    else await git(cwd, ['checkout', '-q', '--detach', hex(target.detach), '--']);
+    // LC_ALL=C: the "would be overwritten" match below needs git's untranslated messages.
+    if ('branch' in target) await git(cwd, ['checkout', '-q', target.branch, '--'], { LC_ALL: 'C' });
+    else await git(cwd, ['checkout', '-q', '--detach', hex(target.detach), '--'], { LC_ALL: 'C' });
   } catch (err) {
     const e = err as { stderr?: string; message?: string };
-    throw new Error(e.stderr?.trim() || e.message || String(err));
+    const text = e.stderr?.trim() || e.message || String(err);
+    throw new CheckoutRefused(text, /would be overwritten by checkout/.test(text));
+  }
+}
+
+export const STASH_KEPT = 'Checked out, but your changes conflicted with it, so they were kept in stash (still in the stash list as stash@{0}).';
+
+const topStash = async (cwd: string) => (await git(cwd, ['stash', 'list', '-n1', '--format=%H'])).trim();
+
+/**
+ * Stash (including untracked files), checkout, `stash pop`. Returns 'restored' when the changes applied cleanly,
+ * 'kept in stash' when the pop conflicted (the entry stays in the stash list). Never discards uncommitted changes:
+ * if the checkout itself fails, the stash is popped back onto the unchanged HEAD and the error rethrown.
+ */
+export async function smartCheckout(cwd: string, target: { branch: string } | { detach: string }): Promise<'restored' | 'kept in stash'> {
+  const before = await topStash(cwd);
+  await git(cwd, ['stash', 'push', '-q', '-u', '-m', 'stagehand: stash & checkout']);
+  const stashed = (await topStash(cwd)) !== before; // nothing to save → no new entry; don't pop someone else's
+  try {
+    await checkout(cwd, target);
+  } catch (err) {
+    if (stashed) await git(cwd, ['stash', 'pop', '-q']);
+    throw err;
+  }
+  if (!stashed) return 'restored';
+  try {
+    await git(cwd, ['stash', 'pop', '-q']);
+    return 'restored';
+  } catch {
+    // git keeps the entry whenever pop fails.
+    return 'kept in stash';
   }
 }

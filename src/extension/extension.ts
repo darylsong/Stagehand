@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import {
-  changedFiles, checkout as gitCheckout, checkoutTarget, combinedChanges, commitDetails, currentBranch, fileAtRevision, firstParent, gitError, listCommits, type ChangedFile, type ErrorKind,
+  changedFiles, checkout as gitCheckout, checkoutTarget, smartCheckout, STASH_KEPT, type CheckoutRefused, combinedChanges, commitDetails, currentBranch, fileAtRevision, firstParent, gitError, listCommits, type ChangedFile, type ErrorKind,
 } from '../core/git';
 
 /** The first workspace folder's path; throws the 'no-folder' GitError when there is none. */
@@ -38,27 +38,50 @@ export async function openDiff(hash: string, file: ChangedFile, preview = true):
   await vscode.commands.executeCommand('vscode.diff', left, right, `${basename(file.path)} (${hash.slice(0, 8)})`, { preview });
 }
 
-/** UI the checkout command uses; injectable so integration tests can answer the quick pick and see the error. */
+/** UI the checkout command uses; injectable so integration tests can answer the quick pick and the modal, and see messages. */
 export type CheckoutUi = {
   pick: (branches: string[]) => Thenable<string | undefined>;
+  /** Modal: Stash & Checkout (true) or Cancel (false). `reason` is git's refusal. */
+  confirmStash: (reason: string) => Thenable<boolean>;
   error: (message: string) => unknown;
+  warn: (message: string) => unknown;
 };
+const STASH_AND_CHECKOUT = 'Stash & Checkout';
 const checkoutUi: CheckoutUi = {
   pick: (branches) => vscode.window.showQuickPick(branches, { placeHolder: 'Several branches point at this commit; check out which?' }),
+  // Modal dialogs add Cancel themselves (resolves undefined).
+  confirmStash: (reason) => vscode.window
+    .showWarningMessage('Your uncommitted changes would be overwritten by checkout.', { modal: true, detail: reason }, STASH_AND_CHECKOUT)
+    .then((choice) => choice === STASH_AND_CHECKOUT),
   error: (message) => vscode.window.showErrorMessage(`Checkout failed: ${message}`),
+  warn: (message) => vscode.window.showWarningMessage(message),
 };
 
-/** Checks out the commit's branch (picking if several), or the commit itself detached. Returns whether HEAD moved. */
-export async function checkout(hash: string, ui: CheckoutUi = checkoutUi): Promise<boolean> {
+/**
+ * Checks out the commit's branch (picking if several), or the commit itself detached. Returns whether HEAD moved.
+ * If uncommitted changes are in the way, offers Stash & Checkout; `stashAndCheckout: true` answers that without the modal.
+ */
+export async function checkout(hash: string, ui: CheckoutUi = checkoutUi, { stashAndCheckout = false } = {}): Promise<boolean> {
   const dir = repoDir();
   const target = await checkoutTarget(dir, hash);
   const branch = typeof target === 'string' ? undefined : target.length > 1 ? await ui.pick(target) : target[0];
   if (typeof target !== 'string' && !branch) return false; // quick pick cancelled
+  const to = branch ? { branch } : { detach: hash };
   try {
-    await gitCheckout(dir, branch ? { branch } : { detach: hash });
+    await gitCheckout(dir, to);
     return true;
   } catch (err) {
-    // ponytail: refusal just reports git's reason; 012 adds Stash & Checkout.
+    const refused = err as CheckoutRefused;
+    if (!refused.localChanges) {
+      ui.error(refused.message);
+      return false;
+    }
+    if (!stashAndCheckout && !(await ui.confirmStash(refused.message))) return false; // Cancel: nothing touched
+  }
+  try {
+    if ((await smartCheckout(dir, to)) === 'kept in stash') ui.warn(STASH_KEPT);
+    return true;
+  } catch (err) {
     ui.error((err as Error).message);
     return false;
   }
@@ -121,7 +144,8 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('stagehand.history.changedFiles', (hash: string | string[]) =>
       Array.isArray(hash) ? combinedChanges(repoDir(), hash) : changedFiles(repoDir(), hash)),
     vscode.commands.registerCommand('stagehand.history.openDiff', openDiff),
-    vscode.commands.registerCommand('stagehand.history.checkout', (hash: string) => checkout(hash)),
+    vscode.commands.registerCommand('stagehand.history.checkout', (hash: string, options?: { stashAndCheckout?: boolean }) =>
+      checkout(hash, checkoutUi, options)),
     vscode.workspace.registerTextDocumentContentProvider('stagehand', {
       provideTextDocumentContent: (uri) => (uri.query ? fileAtRevision(repoDir(), uri.query, uri.path.slice(1)) : ''),
     }),
