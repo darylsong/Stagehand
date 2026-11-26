@@ -241,11 +241,11 @@ test('Ctrl-click toggles, Shift-click selects a range, Shift+Down extends; the p
   const h = (...i: number[]) => i.map((k) => commits[k]!.hash);
 
   await rows.nth(1).click();
-  await rows.nth(3).click({ modifiers: ['Control'] });
+  await rows.nth(3).click({ modifiers: ['ControlOrMeta'] });
   expect(await selectedIndices()).toEqual([1, 3]);
-  await rows.nth(1).click({ modifiers: ['Control'] });
+  await rows.nth(1).click({ modifiers: ['ControlOrMeta'] });
   expect(await selectedIndices()).toEqual([3]);
-  await rows.nth(1).click({ modifiers: ['Control'] });
+  await rows.nth(1).click({ modifiers: ['ControlOrMeta'] });
   expect(await selectedIndices()).toEqual([1, 3]);
 
   // Shift-click: range from the anchor (the last clicked row, 1) to the clicked row, replacing the selection.
@@ -291,7 +291,7 @@ test('combined results show the non-contiguous banner, the different-branches ba
   await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, commits: c }, '*'), commits);
   const rows = p.locator('.row');
   await rows.nth(1).click();
-  await rows.nth(4).click({ modifiers: ['Control'] });
+  await rows.nth(4).click({ modifiers: ['ControlOrMeta'] });
   const hs = [commits[1]!.hash, commits[4]!.hash];
   const files: ChangedFile[] = [{ status: 'M', path: 'README.md', binary: false, base: commits[5]!.hash, target: hs[0] }];
   const reply = (extra: object) => p.evaluate((m) => window.postMessage(m, '*'), { type: 'changedFiles', hash: hs, files, ...extra });
@@ -478,7 +478,7 @@ test('a refresh keeps the selected commits that still exist and the pane on them
   await expect(p.locator('.row.selected .subject')).toHaveText('Commit number 3');
 
   // Multi-selection: one of two selected commits disappears, so the pane follows the one that's left.
-  await p.locator('.row[data-index="5"]').click({ modifiers: ['Control'] });
+  await p.locator('.row[data-index="5"]').click({ modifiers: ['ControlOrMeta'] });
   await expect(p.locator('.row.selected')).toHaveCount(2);
   await clearPosted();
   await postPage(commits.filter((_, i) => i !== 4)); // drops "Commit number 4" (row 5 above)
