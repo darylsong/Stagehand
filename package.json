@@ -1,8 +1,25 @@
 {
   "name": "stagehand",
-  "displayName": "Stagehand",
+  "displayName": "Stagehand - Git History & Graph",
   "publisher": "darylsong",
   "description": "Git history viewer inspired by JetBrains Rider's git log",
+  "categories": [
+    "SCM Providers",
+    "Visualization"
+  ],
+  "keywords": [
+    "git",
+    "history",
+    "log",
+    "graph",
+    "commit",
+    "branch",
+    "diff",
+    "cherry-pick",
+    "revert",
+    "rider",
+    "jetbrains"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/darylsong/stagehand.git"
