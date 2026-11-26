@@ -1,0 +1,21 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Stagehand",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}", "${input:repo}"],
+      "outFiles": ["${workspaceFolder}/out/**/*.js"],
+      "preLaunchTask": "npm: compile"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "repo",
+      "type": "promptString",
+      "description": "Repository to open in the Extension Development Host (use a throwaway clone: checkout changes it)",
+      "default": "/tmp/stagehand-play"
+    }
+  ]
+}
