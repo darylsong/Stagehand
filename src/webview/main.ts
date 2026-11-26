@@ -5,7 +5,7 @@ import { graph, type GraphRow, type Lanes } from '../core/graph';
 export type Message =
   | { type: 'commits'; skip: number; limit?: number; commits: Commit[]; stopped?: { op: 'revert' | 'cherry-pick'; at: string } }
   | { type: 'sequencerError'; message: string }
-  | { type: 'refresh' }
+  | { type: 'refresh'; external?: boolean } // external: from the ref watcher; the reply keeps the notice
   | { type: 'edited'; hash: string; newHash: string }
   | { type: 'details'; details: CommitDetails }
   | { type: 'branches'; hash: string; branches: string[] }
@@ -121,7 +121,8 @@ let showBranches = false; // the "In N branches" list is expanded
 let loading = true; // the first page is requested on load
 let done = false; // a short page came back: no more commits
 let stopped: { op: 'revert' | 'cherry-pick'; at: string } | undefined; // a stopped revert/cherry-pick (from the last first-page reply)
-let sequencerError: string | undefined; // why the last revert/cherry-pick/continue/abort/edit was refused
+let sequencerError: string | undefined; // why the last revert/cherry-pick/continue/abort/edit/new branch was refused
+let keepNotice = false; // the next first page answers a watcher refresh: keep sequencerError
 let details: CommitDetails | undefined; // the details last shown in the pane
 let editing: string | undefined; // the commit whose message dialog waits for its details
 let renamed: { from: string; to: string } | undefined; // an edited commit's new hash, for the next first page to select
@@ -312,7 +313,9 @@ function showMenu(x: number, y: number): void {
     item('Compare with Local', { type: 'compareWithLocal', hash: picked[0]!.hash }, picked.length !== 1), separator());
   menu.append(item(picked.length === 1 ? 'Revert Commit' : `Revert ${picked.length} Commits`,
     { type: 'revert', hash: hashes }, hasMerge), separator(),
-    item('Edit Commit Message…', editMessage, !canEdit()));
+    item('Edit Commit Message…', editMessage, !canEdit()), separator(),
+    item('New Branch…', { type: 'newBranch', hash: picked[0]!.hash }, picked.length !== 1),
+    item('New Tag…', { type: 'newTag', hash: picked[0]!.hash }, picked.length !== 1));
   document.body.append(menu);
   menu.querySelector<HTMLElement>('.menu-item:not(:disabled)')?.focus();
 }
@@ -476,6 +479,7 @@ export function render(root: HTMLElement, msg: Message): void {
     return;
   }
   if (msg.type === 'refresh') {
+    keepNotice ||= msg.external === true;
     refresh();
     return;
   }
@@ -513,7 +517,8 @@ export function render(root: HTMLElement, msg: Message): void {
   anchor = index.get(anchorHash) ?? -1;
   lead = index.get(leadHash) ?? -1;
   stopped = msg.stopped;
-  sequencerError = undefined;
+  if (!keepNotice) sequencerError = undefined;
+  keepNotice = false;
   const list = existing ?? build(root);
   renderNotice(root);
   list.querySelector<HTMLElement>('.spacer')!.style.height = `${commits.length * ROW_HEIGHT}px`;

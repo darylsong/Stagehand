@@ -502,3 +502,54 @@ function gitInput(cwd: string, args: string[], input: string | Buffer, env: Node
     child.stdin!.end(input);
   });
 }
+
+export type RefKind = 'branch' | 'tag';
+
+/** Why `name` can't be a new branch/tag (`check-ref-format`, already exists), or undefined if it can. Messages are ours, not git's. */
+export async function refNameError(cwd: string, kind: RefKind, name: string): Promise<string | undefined> {
+  const invalid = `Not a valid ${kind} name`;
+  if (!name || name.startsWith('-')) return invalid; // would be read as an option
+  try {
+    if (kind === 'branch') {
+      // --branch also expands `@{-1}`-style shorthands; only accept names it prints back unchanged.
+      if ((await git(cwd, ['check-ref-format', '--branch', name])).trim() !== name) return invalid;
+    } else await git(cwd, ['check-ref-format', `refs/tags/${name}`]);
+  } catch {
+    return invalid;
+  }
+  try {
+    await git(cwd, ['show-ref', '--verify', '--quiet', `refs/${kind === 'branch' ? 'heads' : 'tags'}/${name}`]);
+    return `A ${kind} named '${name}' already exists`;
+  } catch {
+    return undefined;
+  }
+}
+
+async function checkRefName(cwd: string, kind: RefKind, name: string): Promise<void> {
+  const error = await refNameError(cwd, kind, name);
+  if (error) throw new Error(error);
+}
+
+/**
+ * Creates branch `name` at `hash`, then switches to it (uncommitted changes come along as git allows).
+ * The branch is created first so a refused switch leaves it in place; that refusal throws git's text.
+ */
+export async function newBranch(cwd: string, hash: string, name: string): Promise<void> {
+  await checkRefName(cwd, 'branch', name);
+  try {
+    await git(cwd, ['branch', name, hex(hash)]);
+    await git(cwd, ['switch', name]);
+  } catch (err) {
+    throw new Error(errText(err));
+  }
+}
+
+/** Creates the lightweight tag `name` at `hash`. */
+export async function newTag(cwd: string, hash: string, name: string): Promise<void> {
+  await checkRefName(cwd, 'tag', name);
+  try {
+    await git(cwd, ['tag', name, hex(hash)]);
+  } catch (err) {
+    throw new Error(errText(err));
+  }
+}

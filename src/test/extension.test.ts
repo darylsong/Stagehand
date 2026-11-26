@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { ChangedFile, Commit, CommitDetails } from '../core/git';
 import { CHERRY_PICK_DIRTY, gitError, REVERT_DIRTY, STASH_KEPT } from '../core/git';
-import { checkout, editCommitMessage, handleMessage, historyView, repoDir, watchRepo, webviewHtml } from '../extension/extension';
+import { askRefName, checkout, editCommitMessage, handleMessage, historyView, repoDir, watchRepo, webviewHtml } from '../extension/extension';
 
 // Workspace repo (.vscode-test.mjs): "init" adds file.txt ("old"), "modify" changes it to "new".
 const commitNamed = async (subject: string) =>
@@ -543,7 +543,7 @@ suite('refresh when the repository changes', function () {
   });
 
   test('the history view posts refresh to its webview when the repo changes, and its loadCommits replies carry the new commit', async () => {
-    const posted: { type: string; commits?: Commit[] }[] = [];
+    const posted: { type: string; commits?: Commit[]; external?: boolean }[] = [];
     let receive: (msg: unknown) => unknown = () => undefined;
     const webview = {
       options: {}, html: '', cspSource: 'csp',
@@ -557,6 +557,8 @@ suite('refresh when the repository changes', function () {
     commitEmpty('view refresh commit');
     git('tag', 'watched-tag');
     await until('the refresh message', () => posted.some((m) => m.type === 'refresh'));
+    // external: the webview keeps its notice through this refresh (023: a failed switch after New Branch).
+    assert.deepStrictEqual(posted.find((m) => m.type === 'refresh'), { type: 'refresh', external: true });
     // The webview answers refresh with loadCommits; the reply starts with the new commit.
     await receive({ type: 'loadCommits', skip: 0, limit: 1000 });
     await until('the commits reply', () => posted.some((m) => m.type === 'commits'));
@@ -776,5 +778,83 @@ suite('edit commit message', () => {
     assert.strictEqual(git('rev-parse', 'HEAD'), fresh);
     assert.strictEqual(git('log', '-1', '--format=%s'), 'pushed');
     git('update-ref', '-d', 'refs/remotes/origin/integration-branch');
+  });
+});
+
+suite('new branch and tag', () => {
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: repoDir(), encoding: 'utf8', stdio: 'pipe' }).trim();
+  const file = () => join(repoDir(), 'file.txt');
+  const tryGit = (...args: string[]) => {
+    try {
+      git(...args);
+    } catch {
+      // nothing to undo
+    }
+  };
+  teardown(() => {
+    git('checkout', '-q', '-f', 'integration-branch');
+    for (const b of ['it-branch', 'it-blocked', 'it-msg-branch']) tryGit('branch', '-D', b);
+    for (const t of ['it-tag', 'it-msg-tag']) tryGit('tag', '-d', t);
+  });
+  /** Runs commands for real, answering the name input box with `name`. */
+  const answering = (name: string | undefined) => (command: string, ...args: unknown[]) =>
+    command === 'stagehand.history.askRefName' ? Promise.resolve(name) : vscode.commands.executeCommand(command, ...args);
+  const replies = async (msg: Parameters<typeof handleMessage>[0], name: string | undefined) => {
+    const posted: unknown[] = [];
+    await handleMessage(msg, (r) => posted.push(r), answering(name));
+    return posted;
+  };
+
+  test('stagehand.newBranch creates the branch at the commit and switches to it; stagehand.newTag creates a lightweight tag', async () => {
+    const [init, modify] = [await commitNamed('init'), await commitNamed('modify')];
+    await vscode.commands.executeCommand('stagehand.newTag', modify.hash, 'it-tag');
+    assert.strictEqual(git('rev-parse', 'refs/tags/it-tag'), modify.hash);
+    assert.strictEqual(git('cat-file', '-t', 'refs/tags/it-tag'), 'commit');
+    await vscode.commands.executeCommand('stagehand.newBranch', init.hash, 'it-branch');
+    assert.strictEqual(git('rev-parse', 'refs/heads/it-branch'), init.hash);
+    assert.strictEqual(git('symbolic-ref', '--short', 'HEAD'), 'it-branch');
+    assert.strictEqual(readFileSync(file(), 'utf8'), 'old\n');
+  });
+
+  test('the newBranch/newTag messages ask for a name, create the ref and post refresh; Cancel does nothing', async () => {
+    const init = await commitNamed('init');
+    assert.deepStrictEqual(await replies({ type: 'newTag', hash: init.hash }, 'it-msg-tag'), [{ type: 'refresh' }]);
+    assert.strictEqual(git('rev-parse', 'refs/tags/it-msg-tag'), init.hash);
+    assert.deepStrictEqual(await replies({ type: 'newBranch', hash: init.hash }, undefined), []);
+    assert.deepStrictEqual(await replies({ type: 'newBranch', hash: init.hash }, 'it-msg-branch'), [{ type: 'refresh' }]);
+    assert.strictEqual(git('symbolic-ref', '--short', 'HEAD'), 'it-msg-branch');
+    assert.strictEqual(git('rev-parse', 'HEAD'), init.hash);
+  });
+
+  test('a refused switch keeps the new branch and posts git\'s error; a duplicate name posts its reason', async () => {
+    const init = await commitNamed('init');
+    const tip = git('rev-parse', 'HEAD');
+    writeFileSync(file(), 'dirty\n');
+    const [reply, ...rest] = await replies({ type: 'newBranch', hash: init.hash }, 'it-blocked') as { type: string; message: string }[];
+    assert.deepStrictEqual(rest, []);
+    assert.strictEqual(reply!.type, 'sequencerError');
+    assert.match(reply!.message, /file\.txt/);
+    assert.strictEqual(git('rev-parse', 'refs/heads/it-blocked'), init.hash);
+    assert.strictEqual(git('symbolic-ref', '--short', 'HEAD'), 'integration-branch');
+    assert.strictEqual(git('rev-parse', 'HEAD'), tip);
+    assert.strictEqual(readFileSync(file(), 'utf8'), 'dirty\n');
+    assert.deepStrictEqual(await replies({ type: 'newBranch', hash: init.hash }, 'it-blocked'),
+      [{ type: 'sequencerError', message: "A branch named 'it-blocked' already exists" }]);
+  });
+
+  test('the name input box validates as you type', async () => {
+    const asked: vscode.InputBoxOptions[] = [];
+    const show = (async (o: vscode.InputBoxOptions) => (asked.push(o), 'x')) as unknown as typeof vscode.window.showInputBox;
+    assert.strictEqual(await askRefName('branch', show), 'x');
+    await askRefName('tag', show);
+    assert.deepStrictEqual(asked.map((o) => o.title), ['New Branch', 'New Tag']);
+    const [branch, tag] = asked.map((o) => o.validateInput!);
+    git('tag', 'it-tag');
+    assert.strictEqual(await branch!('integration-branch'), "A branch named 'integration-branch' already exists");
+    assert.strictEqual(await branch!('a..b'), 'Not a valid branch name');
+    assert.strictEqual(await branch!('it-ok'), null);
+    assert.strictEqual(await tag!('it-tag'), "A tag named 'it-tag' already exists");
+    assert.strictEqual(await tag!('a b'), 'Not a valid tag name');
+    assert.strictEqual(await tag!('integration-branch'), null);
   });
 });

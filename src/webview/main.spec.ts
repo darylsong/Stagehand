@@ -499,7 +499,7 @@ test('right-click on a row offers Checkout, which posts checkout(hash); double-c
   // Right-click an unselected row: it becomes the single selection and the menu offers Checkout.
   await rows.nth(2).click({ button: 'right' });
   await expect(rows.nth(2)).toHaveClass(/selected/);
-  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Cherry-Pick', 'Checkout', 'Compare with Local', 'Revert Commit', 'Edit Commit Message…']);
+  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Cherry-Pick', 'Checkout', 'Compare with Local', 'Revert Commit', 'Edit Commit Message…', 'New Branch…', 'New Tag…']);
   await p.screenshot({ path: 'test-results/screenshots/011-context-menu.png' });
   await menu.getByText('Checkout').click();
   await expect(menu).toHaveCount(0);
@@ -510,7 +510,7 @@ test('right-click on a row offers Checkout, which posts checkout(hash); double-c
   await p.keyboard.press('Escape');
   await expect(menu).toHaveCount(0);
   await rows.nth(2).click({ button: 'right' });
-  await rows.nth(9).click(); // clear of the menu, which now covers rows 3-5
+  await rows.nth(14).click(); // clear of the menu, which now covers rows 3-12
   await expect(menu).toHaveCount(0);
   await rows.nth(5).click();
 
@@ -518,7 +518,7 @@ test('right-click on a row offers Checkout, which posts checkout(hash); double-c
   await rows.nth(6).click({ modifiers: ['Shift'] });
   await rows.nth(5).click({ button: 'right' });
   await expect(p.locator('.row.selected')).toHaveCount(2);
-  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Cherry-Pick 2 Commits', 'Checkout', 'Compare with Local', 'Revert 2 Commits', 'Edit Commit Message…']);
+  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Cherry-Pick 2 Commits', 'Checkout', 'Compare with Local', 'Revert 2 Commits', 'Edit Commit Message…', 'New Branch…', 'New Tag…']);
   await expect(menu.getByText('Checkout')).toBeDisabled();
   await menu.getByText('Checkout').dispatchEvent('click');
   expect(await checkouts()).toHaveLength(1);
@@ -947,7 +947,7 @@ test('019: menu in Rider order with separators; Copy Revision Number and Cmd/Ctr
   await rows.nth(1).click({ modifiers: ['ControlOrMeta'] });
   await rows.nth(1).click({ button: 'right' });
   const kinds = await menu.locator('> *').evaluateAll((els) => els.map((el) => el.className === 'menu-separator' ? '|' : el.textContent));
-  expect(kinds).toEqual(['Copy Revision Number', 'Cherry-Pick 2 Commits', '|', 'Checkout', 'Compare with Local', '|', 'Revert 2 Commits', '|', 'Edit Commit Message…']);
+  expect(kinds).toEqual(['Copy Revision Number', 'Cherry-Pick 2 Commits', '|', 'Checkout', 'Compare with Local', '|', 'Revert 2 Commits', '|', 'Edit Commit Message…', '|', 'New Branch…', 'New Tag…']);
   await expect(menu.getByText('Checkout')).toBeDisabled();
   await expect(menu.getByText('Copy Revision Number')).toBeEnabled();
   await p.screenshot({ path: 'test-results/screenshots/019-menu.png' });
@@ -1164,4 +1164,64 @@ test('022: Edit Commit Message… (menu and F2) for one commit in HEAD; the dial
   await send({ type: 'commits', skip: 0, limit: 1000, commits: rewritten });
   await expect(p.locator('.row.selected .hash')).toHaveText([fresh(2).slice(0, 8)]);
   expect((await posted()).filter((m) => m.type === 'commitDetails').at(-1)).toEqual({ type: 'commitDetails', hash: fresh(2) });
+});
+
+test('023: New Branch… / New Tag… are enabled for one commit and post its hash; disabled for two; a watcher refresh keeps the error', async ({ page: p }) => {
+  await p.addInitScript(() => {
+    const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
+    w.posted = [];
+    w.acquireVsCodeApi = () => ({ postMessage: (m: unknown) => w.posted.push(m) });
+  });
+  await p.goto(page);
+  const send = (m: unknown) => p.evaluate((msg) => window.postMessage(msg, '*'), m);
+  await send({ type: 'commits', skip: 0, commits });
+  const posted = async () => (await p.evaluate(() => (window as unknown as { posted: { type: string }[] }).posted))
+    .filter((m) => m.type === 'newBranch' || m.type === 'newTag');
+  const rows = p.locator('.row');
+  const menu = p.locator('.menu');
+
+  await rows.nth(2).click({ button: 'right' });
+  await expect(menu.getByText('New Branch…')).toBeEnabled();
+  await expect(menu.getByText('New Tag…')).toBeEnabled();
+  await p.screenshot({ path: 'test-results/screenshots/023-menu.png' });
+  await menu.getByText('New Branch…').click();
+  await expect(menu).toHaveCount(0);
+  await rows.nth(2).click({ button: 'right' });
+  await menu.getByText('New Tag…').click();
+  expect(await posted()).toEqual([{ type: 'newBranch', hash: commits[2]!.hash }, { type: 'newTag', hash: commits[2]!.hash }]);
+
+  await rows.nth(3).click({ modifiers: ['Shift'] });
+  await rows.nth(3).click({ button: 'right' });
+  await expect(p.locator('.row.selected')).toHaveCount(2);
+  for (const text of ['New Branch…', 'New Tag…']) {
+    await expect(menu.getByText(text)).toBeDisabled();
+    await menu.getByText(text).dispatchEvent('click');
+  }
+  expect(await posted()).toHaveLength(2);
+  await p.keyboard.press('Escape');
+
+  // A failed switch: the error stays through the ref watcher's refresh (the new branch appears), and goes with the next one.
+  const error = p.locator('.sequencer-error');
+  await send({ type: 'sequencerError', message: 'error: Your local changes would be overwritten by checkout' });
+  await send({ type: 'refresh', external: true });
+  await send({ type: 'commits', skip: 0, limit: 1000, commits });
+  await expect(error).toHaveText('error: Your local changes would be overwritten by checkout');
+  await send({ type: 'refresh' });
+  await send({ type: 'commits', skip: 0, limit: 1000, commits });
+  await expect(error).toHaveCount(0);
+});
+
+test('the vertical splitter is drawn above the horizontal one where their grab margins overlap', async ({ page: p }) => {
+  await p.setViewportSize({ width: 1000, height: 500 });
+  await p.goto(page);
+  await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, commits: c }, '*'), commits);
+  const h = (await p.locator('.splitter-horizontal').boundingBox())!;
+  const v = (await p.locator('.splitter-vertical').boundingBox())!;
+  // The horizontal splitter's left end lies within the vertical one's 5px grab strip.
+  const at = await p.evaluate(([x, y]) => document.elementFromPoint(x!, y!)?.className, [v.x + v.width - 1, h.y + h.height / 2]);
+  expect(at).toBe('splitter splitter-vertical');
+  // The context menu is drawn above both splitters.
+  await p.locator('.row').nth(1).click({ button: 'right', position: { x: v.x - 20 - (await p.locator('.row').nth(1).boundingBox())!.x, y: 5 } });
+  const menuAt = await p.evaluate(([x, y]) => document.elementFromPoint(x!, y!)?.closest('.menu') !== null, [v.x + 2, (await p.locator('.menu').boundingBox())!.y + 10]);
+  expect(menuAt).toBe(true);
 });

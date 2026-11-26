@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import {
-  branchesContaining, changedFiles, checkout as gitCheckout, checkoutTarget, smartCheckout, STASH_KEPT, type CheckoutRefused, combinedChanges, commitDetails, currentBranch, fileAtRevision, firstParent, gitError, listCommits, localChanges, cherryPick, editMessage, headCommit, isPushed, revert, sequencerAbort, sequencerContinue, sequencerState, type ChangedFile, type ErrorKind,
+  branchesContaining, changedFiles, checkout as gitCheckout, checkoutTarget, smartCheckout, STASH_KEPT, type CheckoutRefused, combinedChanges, commitDetails, currentBranch, fileAtRevision, firstParent, gitError, listCommits, localChanges, cherryPick, editMessage, headCommit, isPushed, newBranch, newTag, refNameError, type RefKind, revert, sequencerAbort, sequencerContinue, sequencerState, type ChangedFile, type ErrorKind,
 } from '../core/git';
 
 /** The first workspace folder's path; throws the 'no-folder' GitError when there is none. */
@@ -117,6 +117,15 @@ export async function editCommitMessage(hash: string, message: string, confirm =
   return editMessage(dir, hash, message, head);
 }
 
+/** Input box for a new branch/tag name, validated as you type. `show` is injectable so tests can read the options. */
+export function askRefName(kind: RefKind, show: typeof vscode.window.showInputBox = vscode.window.showInputBox): Thenable<string | undefined> {
+  return show({
+    title: kind === 'branch' ? 'New Branch' : 'New Tag',
+    prompt: kind === 'branch' ? 'Name of the new branch (created here and checked out)' : 'Name of the new tag',
+    validateInput: async (name) => (await refNameError(repoDir(), kind, name)) ?? null,
+  });
+}
+
 /** Handles one message from the webview; `post` sends the reply. */
 export async function handleMessage(
   msg: WebviewMessage,
@@ -164,6 +173,17 @@ export async function handleMessage(
         return;
       }
       if (newHash) post({ type: 'edited', hash: msg.hash, newHash }); // the webview reloads, selecting newHash
+    } else if (msg.type === 'newBranch' || msg.type === 'newTag') {
+      const name = await run('stagehand.history.askRefName', msg.type === 'newBranch' ? 'branch' : 'tag');
+      if (!name) return; // cancelled
+      try {
+        await run(`stagehand.${msg.type}`, msg.hash, name);
+      } catch (err) {
+        // A failed switch keeps the new branch; the ref watcher's refresh shows it and keeps this notice.
+        post({ type: 'sequencerError', message: (err as Error).message ?? String(err) });
+        return;
+      }
+      post({ type: 'refresh' });
     } else if (msg.type === 'compareWithLocal') {
       await run('stagehand.compareWithLocal', msg.hash);
     } else if (msg.type === 'copyRevision') {
@@ -219,7 +239,8 @@ export function historyView(webviewDir: vscode.Uri): vscode.WebviewViewProvider 
       webview.onDidReceiveMessage((msg) => handleMessage(msg, (reply) => webview.postMessage(reply)));
       const folder = vscode.workspace.workspaceFolders?.[0];
       if (folder) {
-        const watcher = watchRepo(folder.uri.fsPath, () => webview.postMessage({ type: 'refresh' }));
+        // external: the webview keeps its notice (e.g. a failed switch after New Branch created the branch).
+        const watcher = watchRepo(folder.uri.fsPath, () => webview.postMessage({ type: 'refresh', external: true }));
         view.onDidDispose(() => watcher.dispose());
       }
     },
@@ -245,6 +266,9 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand('stagehand.compareWithLocal', compareWithLocal),
     vscode.commands.registerCommand('stagehand.editMessage', (hash: string, message: string) => editCommitMessage(hash, message)),
+    vscode.commands.registerCommand('stagehand.history.askRefName', (kind: RefKind) => askRefName(kind)),
+    vscode.commands.registerCommand('stagehand.newBranch', (hash: string, name: string) => newBranch(repoDir(), hash, name)),
+    vscode.commands.registerCommand('stagehand.newTag', (hash: string, name: string) => newTag(repoDir(), hash, name)),
     vscode.commands.registerCommand('stagehand.revert', (hashes: string[]) => revert(repoDir(), hashes)),
     vscode.commands.registerCommand('stagehand.cherryPick', (hashes: string[]) => cherryPick(repoDir(), hashes)),
     vscode.commands.registerCommand('stagehand.sequencerContinue', () => sequencerContinue(repoDir())),

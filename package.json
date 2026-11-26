@@ -69,6 +69,18 @@
         "title": "Stagehand: Edit Commit Message"
       },
       {
+        "command": "stagehand.newBranch",
+        "title": "Stagehand: New Branch"
+      },
+      {
+        "command": "stagehand.newTag",
+        "title": "Stagehand: New Tag"
+      },
+      {
+        "command": "stagehand.history.askRefName",
+        "title": "Stagehand: Ask for a Branch/Tag Name"
+      },
+      {
         "command": "stagehand.revert",
         "title": "Stagehand: Revert Commits"
       },
