@@ -4,8 +4,15 @@
   <meta charset="utf-8">
   <title>Stagehand</title>
   <style>
-    body { font-family: var(--vscode-font-family, system-ui); color: var(--vscode-foreground, #333); background: var(--vscode-editor-background, #fff); padding: 12px; }
-    #branch { font-weight: 600; }
+    body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); color: var(--vscode-foreground); background: var(--vscode-panel-background); margin: 0; padding: 0; }
+    .row { display: flex; gap: 12px; padding: 0 8px; line-height: 22px; white-space: nowrap; }
+    .row:hover { background: var(--vscode-list-hoverBackground); }
+    .subject { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+    .author, .date, .hash { color: var(--vscode-descriptionForeground); }
+    .author { width: 140px; overflow: hidden; text-overflow: ellipsis; }
+    .date { width: 110px; }
+    .hash { font-family: var(--vscode-editor-font-family); }
+    .message { display: block; padding: 8px; color: var(--vscode-errorForeground); }
   </style>
 </head>
 <body>

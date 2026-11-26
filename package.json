@@ -9,10 +9,32 @@
   },
   "main": "./out/extension/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "stagehand",
+          "title": "Stagehand",
+          "icon": "$(git-commit)"
+        }
+      ]
+    },
+    "views": {
+      "stagehand": [
+        {
+          "type": "webview",
+          "id": "stagehand.history",
+          "name": "History"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "stagehand.showCurrentBranch",
         "title": "Stagehand: Show Current Branch"
+      },
+      {
+        "command": "stagehand.history.loadCommits",
+        "title": "Stagehand: Load Commits"
       }
     ]
   },
