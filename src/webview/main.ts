@@ -126,6 +126,7 @@ let keepNotice = false; // the next first page answers a watcher refresh: keep s
 let details: CommitDetails | undefined; // the details last shown in the pane
 let editing: string | undefined; // the commit whose message dialog waits for its details
 let renamed: { from: string; to: string } | undefined; // an edited commit's new hash, for the next first page to select
+let seeking: string | undefined; // Go to Parent Commit: the parent hash pages are loading for
 
 const isHead = (c: Commit) => c.refs.some((r) => r === 'HEAD' || r.startsWith('HEAD -> '));
 
@@ -146,6 +147,35 @@ function canEdit(): boolean {
     todo.push(...(byHash.get(h)?.parents ?? []));
   }
   return false;
+}
+
+/** Go to Parent: the selected commit's first parent hash; undefined for a root, several selected, or a parent the finished log never showed. */
+function parentOf(): string | undefined {
+  const c = selected.size === 1 ? commits[[...selected][0]!] : undefined;
+  const p = c?.parents[0];
+  return p && (!done || commits.some((x) => x.hash === p)) ? p : undefined;
+}
+
+/** Go to Child: the nearest row above the selected one that has it as a parent; -1 when none is loaded. */
+function childOf(): number {
+  if (selected.size !== 1) return -1;
+  const i = [...selected][0]!;
+  for (let k = i - 1; k >= 0; k--) if (commits[k]!.parents.includes(commits[i]!.hash)) return k;
+  return -1;
+}
+
+function goChild(list: HTMLElement): void {
+  select(list, childOf());
+}
+
+/** Selects the first parent, loading pages until it shows up. */
+function goParent(list: HTMLElement): void {
+  const p = parentOf();
+  if (!p) return;
+  const i = commits.findIndex((c) => c.hash === p);
+  if (i >= 0) return select(list, i);
+  seeking = p;
+  if (!loading) loadMore();
 }
 
 /** Opens the message dialog for the selected commit once its details (the full message) are here. */
@@ -246,6 +276,7 @@ function select(list: HTMLElement, i: number, mode: 'plain' | 'toggle' | 'extend
   if (i < 0 || i >= commits.length) return;
   if (mode === 'plain' && selected.size === 1 && selected.has(i)) return;
   editing = undefined; // a dialog still waiting for its details is dropped once the selection changes
+  seeking = undefined; // so is a Go to Parent still loading pages
   if (mode === 'extend' && anchor >= 0) selected = new Set(range(anchor, i));
   else if (mode === 'toggle') {
     if (!selected.delete(i)) selected.add(i);
@@ -280,8 +311,8 @@ function showSelection(): void {
   if (hashes.length) post({ type: 'changedFiles', hash: hashes });
 }
 
-/** The row context menu, in Rider's order: Copy, Cherry-Pick (no merges) │ Checkout, Compare with Local (one commit only) │ Revert (no merges) │ Edit Commit Message… (one commit in HEAD). Inapplicable items are disabled. */
-function showMenu(x: number, y: number): void {
+/** The row context menu, in Rider's order: Copy, Cherry-Pick (no merges) │ Checkout, Compare with Local (one commit only) │ Revert (no merges) │ Edit Commit Message… (one commit in HEAD) │ New Branch…, New Tag… │ Go to Child / Parent Commit. Inapplicable items are disabled. */
+function showMenu(list: HTMLElement, x: number, y: number): void {
   hideMenu();
   const picked = [...selected].sort((a, b) => a - b).map((i) => commits[i]!);
   const menu = document.createElement('div');
@@ -315,7 +346,9 @@ function showMenu(x: number, y: number): void {
     { type: 'revert', hash: hashes }, hasMerge), separator(),
     item('Edit Commit Message…', editMessage, !canEdit()), separator(),
     item('New Branch…', { type: 'newBranch', hash: picked[0]!.hash }, picked.length !== 1),
-    item('New Tag…', { type: 'newTag', hash: picked[0]!.hash }, picked.length !== 1));
+    item('New Tag…', { type: 'newTag', hash: picked[0]!.hash }, picked.length !== 1), separator(),
+    item('Go to Child Commit', () => { list.focus(); goChild(list); }, childOf() < 0), // focus back: ←/→ go on from there
+    item('Go to Parent Commit', () => { list.focus(); goParent(list); }, !parentOf()));
   document.body.append(menu);
   menu.querySelector<HTMLElement>('.menu-item:not(:disabled)')?.focus();
 }
@@ -500,8 +533,15 @@ export function render(root: HTMLElement, msg: Message): void {
     lanes = g.state;
     existing.querySelector<HTMLElement>('.spacer')!.style.height = `${commits.length * ROW_HEIGHT}px`;
     renderRows(existing);
+    if (seeking) {
+      const i = commits.findIndex((c) => c.hash === seeking);
+      if (i >= 0) select(existing, i);
+      else if (done) seeking = undefined;
+      else if (!loading) loadMore(); // renderRows may have asked already
+    }
     return;
   }
+  seeking = undefined; // a first page replaces the list; the user can press → again
   // A refresh (or any first page): keep the selected commits that are still in the list, by hash.
   // An edited commit is kept selected under its new hash.
   const rename = (h: string) => (h === renamed?.from ? renamed.to : h);
@@ -569,7 +609,7 @@ function build(root: HTMLElement): HTMLElement {
     e.preventDefault();
     const i = Number(row.dataset.index);
     if (!selected.has(i)) select(list, i);
-    showMenu(e.clientX, e.clientY);
+    showMenu(list, e.clientX, e.clientY);
   });
   list.addEventListener('keydown', (e) => {
     if (e.key.toLowerCase() === 'c' && (e.ctrlKey || e.metaKey) && selected.size) {
@@ -580,6 +620,12 @@ function build(root: HTMLElement): HTMLElement {
     if (e.key === 'F2') {
       e.preventDefault();
       if (canEdit()) editMessage();
+      return;
+    }
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      e.preventDefault();
+      if (e.key === 'ArrowLeft') goChild(list);
+      else goParent(list);
       return;
     }
     const step = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;

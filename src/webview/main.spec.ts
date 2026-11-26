@@ -499,7 +499,7 @@ test('right-click on a row offers Checkout, which posts checkout(hash); double-c
   // Right-click an unselected row: it becomes the single selection and the menu offers Checkout.
   await rows.nth(2).click({ button: 'right' });
   await expect(rows.nth(2)).toHaveClass(/selected/);
-  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Cherry-Pick', 'Checkout', 'Compare with Local', 'Revert Commit', 'Edit Commit Message…', 'New Branch…', 'New Tag…']);
+  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Cherry-Pick', 'Checkout', 'Compare with Local', 'Revert Commit', 'Edit Commit Message…', 'New Branch…', 'New Tag…', 'Go to Child Commit', 'Go to Parent Commit']);
   await p.screenshot({ path: 'test-results/screenshots/011-context-menu.png' });
   await menu.getByText('Checkout').click();
   await expect(menu).toHaveCount(0);
@@ -518,7 +518,7 @@ test('right-click on a row offers Checkout, which posts checkout(hash); double-c
   await rows.nth(6).click({ modifiers: ['Shift'] });
   await rows.nth(5).click({ button: 'right' });
   await expect(p.locator('.row.selected')).toHaveCount(2);
-  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Cherry-Pick 2 Commits', 'Checkout', 'Compare with Local', 'Revert 2 Commits', 'Edit Commit Message…', 'New Branch…', 'New Tag…']);
+  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Cherry-Pick 2 Commits', 'Checkout', 'Compare with Local', 'Revert 2 Commits', 'Edit Commit Message…', 'New Branch…', 'New Tag…', 'Go to Child Commit', 'Go to Parent Commit']);
   await expect(menu.getByText('Checkout')).toBeDisabled();
   await menu.getByText('Checkout').dispatchEvent('click');
   expect(await checkouts()).toHaveLength(1);
@@ -947,7 +947,7 @@ test('019: menu in Rider order with separators; Copy Revision Number and Cmd/Ctr
   await rows.nth(1).click({ modifiers: ['ControlOrMeta'] });
   await rows.nth(1).click({ button: 'right' });
   const kinds = await menu.locator('> *').evaluateAll((els) => els.map((el) => el.className === 'menu-separator' ? '|' : el.textContent));
-  expect(kinds).toEqual(['Copy Revision Number', 'Cherry-Pick 2 Commits', '|', 'Checkout', 'Compare with Local', '|', 'Revert 2 Commits', '|', 'Edit Commit Message…', '|', 'New Branch…', 'New Tag…']);
+  expect(kinds).toEqual(['Copy Revision Number', 'Cherry-Pick 2 Commits', '|', 'Checkout', 'Compare with Local', '|', 'Revert 2 Commits', '|', 'Edit Commit Message…', '|', 'New Branch…', 'New Tag…', '|', 'Go to Child Commit', 'Go to Parent Commit']);
   await expect(menu.getByText('Checkout')).toBeDisabled();
   await expect(menu.getByText('Copy Revision Number')).toBeEnabled();
   await p.screenshot({ path: 'test-results/screenshots/019-menu.png' });
@@ -1224,4 +1224,129 @@ test('the vertical splitter is drawn above the horizontal one where their grab m
   await p.locator('.row').nth(1).click({ button: 'right', position: { x: v.x - 20 - (await p.locator('.row').nth(1).boundingBox())!.x, y: 5 } });
   const menuAt = await p.evaluate(([x, y]) => document.elementFromPoint(x!, y!)?.closest('.menu') !== null, [v.x + 2, (await p.locator('.menu').boundingBox())!.y + 10]);
   expect(menuAt).toBe(true);
+});
+
+test('024: Go to Child / Parent Commit (menu and ←/→): first parent of a merge, nearest of two children, disabled at the root and with no loaded child', async ({ page: p }) => {
+  await p.goto(page);
+  // 0 C → B; 1 M merges A (first parent) and X; 2 X → B; 3 A → B; 4 B → R; 5 R is the root.
+  const h = (i: number) => commits[i]!.hash;
+  const parents = [[h(4)], [h(3), h(2)], [h(4)], [h(4)], [h(5)], []];
+  const graphed = commits.slice(0, 6).map((c, i) => ({ ...c, parents: parents[i]! }));
+  await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, commits: c }, '*'), graphed);
+  const rows = p.locator('.row');
+  const menu = p.locator('.menu');
+  const selectedIndex = () => p.locator('.row.selected').getAttribute('data-index');
+
+  await rows.nth(1).click();
+  await p.keyboard.press('ArrowRight'); // merge → first parent A, not X right below it
+  expect(await selectedIndex()).toBe('3');
+  await p.keyboard.press('ArrowRight');
+  expect(await selectedIndex()).toBe('4');
+  await p.keyboard.press('ArrowLeft'); // B has children A, X and C: A is the nearest row above
+  expect(await selectedIndex()).toBe('3');
+  await p.keyboard.press('ArrowLeft');
+  expect(await selectedIndex()).toBe('1');
+
+  // The menu: in its own group after New Tag…; items select.
+  await rows.nth(4).click({ button: 'right' });
+  await expect(menu.getByText('Go to Child Commit')).toBeEnabled();
+  await expect(menu.getByText('Go to Parent Commit')).toBeEnabled();
+  await p.screenshot({ path: 'test-results/screenshots/024-menu.png' });
+  await menu.getByText('Go to Parent Commit').click();
+  expect(await selectedIndex()).toBe('5');
+  await rows.nth(5).click({ button: 'right' }); // the root: no parent
+  await expect(menu.getByText('Go to Parent Commit')).toBeDisabled();
+  await menu.getByText('Go to Child Commit').click();
+  expect(await selectedIndex()).toBe('4');
+  await p.keyboard.press('ArrowRight');
+  await p.keyboard.press('ArrowRight'); // root: nothing happens
+  expect(await selectedIndex()).toBe('5');
+
+  // The top row has no loaded child.
+  await rows.nth(0).click({ button: 'right' });
+  await expect(menu.getByText('Go to Child Commit')).toBeDisabled();
+  await expect(menu.getByText('Go to Parent Commit')).toBeEnabled();
+  await p.keyboard.press('Escape');
+  await p.locator('.commits').focus();
+  await p.keyboard.press('ArrowLeft');
+  expect(await selectedIndex()).toBe('0');
+
+  // Two selected: both disabled, keys do nothing.
+  await rows.nth(1).click({ modifiers: ['Shift'] });
+  await rows.nth(1).click({ button: 'right' });
+  await expect(menu.getByText('Go to Child Commit')).toBeDisabled();
+  await expect(menu.getByText('Go to Parent Commit')).toBeDisabled();
+  await p.keyboard.press('Escape');
+  await p.locator('.commits').focus();
+  await p.keyboard.press('ArrowRight');
+  await expect(p.locator('.row.selected')).toHaveCount(2);
+});
+
+test('024: → on a commit whose parent is not loaded yet loads pages until it is, then selects it and scrolls to it', async ({ page: p }) => {
+  await p.addInitScript(() => {
+    const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
+    w.posted = [];
+    w.acquireVsCodeApi = () => ({ postMessage: (m: unknown) => w.posted.push(m) });
+  });
+  await p.goto(page);
+  // A chain of 70; row 0's first parent is row 60 (a long first-parent line next to a side branch).
+  const chain = Array.from({ length: 70 }, (_, i) => ({ ...commits[1]!, hash: i.toString(16).padStart(40, '0'), subject: `C${i}` }));
+  chain.forEach((c, i) => { c.parents = i === 0 ? [chain[60]!.hash, chain[1]!.hash] : i < 69 ? [chain[i + 1]!.hash] : []; });
+  const send = (m: unknown) => p.evaluate((msg) => window.postMessage(msg, '*'), m);
+  const pages = async () => (await p.evaluate(() => (window as unknown as { posted: { type: string }[] }).posted))
+    .filter((m) => m.type === 'loadCommits');
+  await send({ type: 'commits', skip: 0, limit: 40, commits: chain.slice(0, 40) });
+  await expect.poll(pages).toEqual([{ type: 'loadCommits', skip: 0, limit: 1000 }, { type: 'loadCommits', skip: 40, limit: 1000 }]); // the usual prefetch
+  await p.locator('.row').nth(0).click();
+  await p.keyboard.press('ArrowRight');
+  expect(await pages()).toHaveLength(2); // the page already on its way isn't asked twice
+  await send({ type: 'commits', skip: 40, limit: 10, commits: chain.slice(40, 50) }); // not there yet: ask again
+  await expect.poll(pages).toHaveLength(3);
+  expect((await pages())[2]).toEqual({ type: 'loadCommits', skip: 50, limit: 1000 });
+  await expect(p.locator('.row.selected')).toHaveAttribute('data-index', '0');
+  await send({ type: 'commits', skip: 50, limit: 1000, commits: chain.slice(50) });
+  const target = p.locator('.row[data-index="60"]');
+  await expect(target).toHaveClass(/selected/);
+  await expect(target).toBeInViewport();
+  await expect(p.locator('.row.selected')).toHaveCount(1);
+  await p.screenshot({ path: 'test-results/screenshots/024-paged-parent.png' });
+});
+
+test('024: → far from the end of a long list asks for the next page itself, and again while the parent is still missing; disabled once the log ends without it', async ({ page: p }) => {
+  await p.addInitScript(() => {
+    const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
+    w.posted = [];
+    w.acquireVsCodeApi = () => ({ postMessage: (m: unknown) => w.posted.push(m) });
+  });
+  await p.goto(page);
+  // A chain of 400; row 0's first parent is row 350. A first page of 300 at the top is far beyond the prefetch distance.
+  const chain = Array.from({ length: 400 }, (_, i) => ({ ...commits[1]!, hash: i.toString(16).padStart(40, '0'), subject: `C${i}` }));
+  chain.forEach((c, i) => { c.parents = i === 0 ? [chain[350]!.hash, chain[1]!.hash] : i < 399 ? [chain[i + 1]!.hash] : []; });
+  const send = (m: unknown) => p.evaluate((msg) => window.postMessage(msg, '*'), m);
+  const pages = async () => (await p.evaluate(() => (window as unknown as { posted: { type: string }[] }).posted))
+    .filter((m) => m.type === 'loadCommits');
+  await send({ type: 'commits', skip: 0, limit: 300, commits: chain.slice(0, 300) });
+  await p.locator('.row').nth(0).click();
+  expect(await pages()).toHaveLength(1); // only the initial request: no prefetch this far from the end
+  await p.keyboard.press('ArrowRight');
+  expect((await pages()).slice(1)).toEqual([{ type: 'loadCommits', skip: 300, limit: 1000 }]);
+  await send({ type: 'commits', skip: 300, limit: 30, commits: chain.slice(300, 330) }); // not there yet
+  await expect.poll(async () => (await pages()).slice(2)).toEqual([{ type: 'loadCommits', skip: 330, limit: 1000 }]);
+  await expect(p.locator('.row.selected')).toHaveAttribute('data-index', '0');
+  await send({ type: 'commits', skip: 330, limit: 1000, commits: chain.slice(330) });
+  const target = p.locator('.row[data-index="350"]');
+  await expect(target).toHaveClass(/selected/);
+  await expect(target).toBeInViewport();
+
+  // A finished log that never shows the parent (e.g. shallow): Go to Parent is disabled and → asks for nothing.
+  const shallow = chain.slice(0, 5).map((c, i) => ({ ...c, parents: i < 4 ? [chain[i + 1]!.hash] : [chain[5]!.hash] }));
+  await send({ type: 'commits', skip: 0, limit: 1000, commits: shallow });
+  await p.locator('.row').nth(4).click({ button: 'right' });
+  await expect(p.locator('.menu').getByText('Go to Parent Commit')).toBeDisabled();
+  await p.keyboard.press('Escape');
+  await p.locator('.commits').focus();
+  const before = (await pages()).length;
+  await p.keyboard.press('ArrowRight');
+  expect(await pages()).toHaveLength(before);
+  await expect(p.locator('.row.selected')).toHaveAttribute('data-index', '4');
 });
