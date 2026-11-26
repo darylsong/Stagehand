@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import {
-  branchesContaining, changedFiles, checkout as gitCheckout, checkoutTarget, smartCheckout, STASH_KEPT, type CheckoutRefused, combinedChanges, commitDetails, currentBranch, fileAtRevision, firstParent, gitError, listCommits, localChanges, cherryPick, revert, sequencerAbort, sequencerContinue, sequencerState, type ChangedFile, type ErrorKind,
+  branchesContaining, changedFiles, checkout as gitCheckout, checkoutTarget, smartCheckout, STASH_KEPT, type CheckoutRefused, combinedChanges, commitDetails, currentBranch, fileAtRevision, firstParent, gitError, listCommits, localChanges, cherryPick, editMessage, headCommit, isPushed, revert, sequencerAbort, sequencerContinue, sequencerState, type ChangedFile, type ErrorKind,
 } from '../core/git';
 
 /** The first workspace folder's path; throws the 'no-folder' GitError when there is none. */
@@ -17,7 +17,7 @@ type Run = (command: string, ...args: unknown[]) => Thenable<unknown>;
 const runCommand: Run = (command, ...args) => vscode.commands.executeCommand(command, ...args);
 
 type WebviewMessage = {
-  type: string; skip?: number; limit?: number; hash?: string | string[]; text?: string; file?: ChangedFile; preview?: boolean;
+  type: string; skip?: number; limit?: number; hash?: string | string[]; text?: string; message?: string; file?: ChangedFile; preview?: boolean;
 };
 
 /** `stagehand:/<path>?<rev>`; an empty rev means the file doesn't exist on that side. */
@@ -102,6 +102,21 @@ export async function checkout(hash: string, ui: CheckoutUi = checkoutUi, { stas
   }
 }
 
+/** Modal: true = edit anyway. Injectable so integration tests can answer it. */
+export type ConfirmForcePush = (hash: string) => Thenable<boolean>;
+const EDIT_ANYWAY = 'Edit Anyway';
+const confirmForcePush: ConfirmForcePush = (hash) => vscode.window
+  .showWarningMessage(`${hash.slice(0, 8)} is already pushed. Editing it means you'll need to force-push. Edit anyway?`, { modal: true }, EDIT_ANYWAY)
+  .then((choice) => choice === EDIT_ANYWAY);
+
+/** Rewords a commit (see core `editMessage`), warning first if the upstream has it. Returns the new hash, or undefined if cancelled. */
+export async function editCommitMessage(hash: string, message: string, confirm = confirmForcePush): Promise<string | undefined> {
+  const dir = repoDir();
+  const head = await headCommit(dir); // the compare-and-swap is against HEAD as it was before the modal
+  if (await isPushed(dir, hash) && !(await confirm(hash))) return undefined;
+  return editMessage(dir, hash, message, head);
+}
+
 /** Handles one message from the webview; `post` sends the reply. */
 export async function handleMessage(
   msg: WebviewMessage,
@@ -140,6 +155,15 @@ export async function handleMessage(
         return;
       }
       post({ type: 'refresh' }); // the webview reloads (keeping its selection); the reply carries the banner state
+    } else if (msg.type === 'editMessage') {
+      let newHash: unknown;
+      try {
+        newHash = await run('stagehand.editMessage', msg.hash, msg.message);
+      } catch (err) {
+        post({ type: 'sequencerError', message: (err as Error).message ?? String(err) }); // shown above the list
+        return;
+      }
+      if (newHash) post({ type: 'edited', hash: msg.hash, newHash }); // the webview reloads, selecting newHash
     } else if (msg.type === 'compareWithLocal') {
       await run('stagehand.compareWithLocal', msg.hash);
     } else if (msg.type === 'copyRevision') {
@@ -220,6 +244,7 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.window.setStatusBarMessage('Copied', 2000);
     }),
     vscode.commands.registerCommand('stagehand.compareWithLocal', compareWithLocal),
+    vscode.commands.registerCommand('stagehand.editMessage', (hash: string, message: string) => editCommitMessage(hash, message)),
     vscode.commands.registerCommand('stagehand.revert', (hashes: string[]) => revert(repoDir(), hashes)),
     vscode.commands.registerCommand('stagehand.cherryPick', (hashes: string[]) => cherryPick(repoDir(), hashes)),
     vscode.commands.registerCommand('stagehand.sequencerContinue', () => sequencerContinue(repoDir())),

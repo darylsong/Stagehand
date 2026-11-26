@@ -409,3 +409,96 @@ export async function sequencerAbort(cwd: string): Promise<void> {
     throw new Error(errText(err));
   }
 }
+
+export const BRANCH_CHANGED = 'The branch changed while editing; try again';
+
+/** Whether `hash` is reachable from the current branch's upstream (false when there is none, or HEAD is detached). */
+export async function isPushed(cwd: string, hash: string): Promise<boolean> {
+  hex(hash);
+  try {
+    await git(cwd, ['rev-parse', '--verify', '-q', '@{upstream}']);
+  } catch {
+    return false;
+  }
+  try {
+    await git(cwd, ['merge-base', '--is-ancestor', hash, '@{upstream}']);
+    return true;
+  } catch (err) {
+    if ((err as { code?: unknown }).code === 1) return false;
+    throw new Error(errText(err));
+  }
+}
+
+/** The full hash HEAD points at. */
+export const headCommit = async (cwd: string) => (await git(cwd, ['rev-parse', '--verify', 'HEAD'])).trim();
+
+/**
+ * Rewords `hash` (an ancestor of HEAD) without touching the working tree or index: `commit-tree` a copy with the same
+ * tree, parents and author and the new message (committer date now), re-creates every commit between it and HEAD with
+ * its parents remapped (merges included), then moves HEAD's ref (the branch, or HEAD when detached) by compare-and-swap
+ * against `oldHead` (default: HEAD now). Throws BRANCH_CHANGED, writing no ref, if HEAD has moved. Returns the new hash.
+ */
+export async function editMessage(cwd: string, hash: string, message: string, oldHead?: string): Promise<string> {
+  hex(hash);
+  if (!message.trim()) throw new Error('The commit message is empty');
+  const head = oldHead ?? await headCommit(cwd);
+  hex(head);
+  const full = (await git(cwd, ['rev-parse', '--verify', `${hash}^{commit}`])).trim();
+  try {
+    await git(cwd, ['merge-base', '--is-ancestor', full, head]);
+  } catch (err) {
+    if ((err as { code?: unknown }).code !== 1) throw new Error(errText(err));
+    throw new Error(`Can't edit: ${hash.slice(0, 8)} isn't in the current branch`);
+  }
+  let ref = 'HEAD';
+  try {
+    ref = (await git(cwd, ['symbolic-ref', '-q', 'HEAD'])).trim();
+  } catch {
+    // detached: HEAD itself moves
+  }
+  const remap = new Map<string, string>();
+  // Raw commit objects as latin1 strings: one char per byte, so any message encoding survives the round trip.
+  const catFile = async (c: string) => (await execFileAsync('git', ['cat-file', 'commit', c], { cwd, encoding: 'latin1', maxBuffer: 256 * 1024 * 1024 })).stdout;
+  // The edited commit: commit-tree with the same tree, parents and author, the new message, committer date now.
+  const raw = await catFile(full);
+  const headers = raw.slice(0, raw.indexOf('\n\n')).split('\n');
+  const value = (k: string) => headers.filter((h) => h.startsWith(`${k} `)).map((h) => h.slice(k.length + 1));
+  const [, name, email, date] = /^(.*) <(.*)> (\d+ [+-]\d{4})$/.exec(Buffer.from(value('author')[0] ?? '', 'latin1').toString()) ?? [];
+  if (date === undefined) throw new Error(`Can't read the author of ${full}`);
+  const env = { GIT_AUTHOR_NAME: name!, GIT_AUTHOR_EMAIL: email!, GIT_AUTHOR_DATE: `@${date}` };
+  const args = ['commit-tree', value('tree')[0]!, ...value('parent').flatMap((p) => ['-p', p]), '-F', '-'];
+  remap.set(full, (await gitInput(cwd, args, `${message.replace(/\s+$/, '')}\n`, env)).trim());
+  // Its committer line (now) is reused for the descendants.
+  const committer = (await catFile(remap.get(full)!)).split('\n').find((h) => h.startsWith('committer '))!;
+  // Descendants of the edited commit up to HEAD, parents before children: the same object bytes with parents remapped
+  // and the new committer. A signature (gpgsig, multi-line) would no longer verify, so it is dropped.
+  const between = (await git(cwd, ['rev-list', '--topo-order', '--reverse', '--ancestry-path', `${full}..${head}`, '--'])).split('\n').filter(Boolean);
+  for (const c of between) {
+    const obj = await catFile(c);
+    const cut = obj.indexOf('\n\n');
+    let inSig = false;
+    const kept = obj.slice(0, cut).split('\n').filter((h) => {
+      inSig = /^gpgsig(-sha256)? /.test(h) || (inSig && h.startsWith(' '));
+      return !inSig;
+    }).map((h) => (h.startsWith('parent ') ? `parent ${remap.get(h.slice(7)) ?? h.slice(7)}` : h.startsWith('committer ') ? committer : h));
+    const bytes = Buffer.from(kept.join('\n') + obj.slice(cut), 'latin1');
+    remap.set(c, (await gitInput(cwd, ['hash-object', '-t', 'commit', '-w', '--stdin'], bytes, {})).trim());
+  }
+  try {
+    await git(cwd, ['update-ref', '-m', `stagehand: reword ${full.slice(0, 8)}`, ref, remap.get(head)!, head]);
+  } catch (err) {
+    if ((await headCommit(cwd)) !== head) throw new Error(BRANCH_CHANGED);
+    throw new Error(errText(err));
+  }
+  return remap.get(full)!;
+}
+
+/** git with `input` on stdin; committer date always now. */
+function gitInput(cwd: string, args: string[], input: string | Buffer, env: NodeJS.ProcessEnv): Promise<string> {
+  return new Promise((res, rej) => {
+    const full = { ...process.env, ...env };
+    delete full.GIT_COMMITTER_DATE; // committer date = now
+    const child = execFile('git', args, { cwd, env: full }, (err, stdout) => (err ? rej(err) : res(stdout)));
+    child.stdin!.end(input);
+  });
+}

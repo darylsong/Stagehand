@@ -65,6 +65,10 @@
         "title": "Stagehand: Compare with Local"
       },
       {
+        "command": "stagehand.editMessage",
+        "title": "Stagehand: Edit Commit Message"
+      },
+      {
         "command": "stagehand.revert",
         "title": "Stagehand: Revert Commits"
       },

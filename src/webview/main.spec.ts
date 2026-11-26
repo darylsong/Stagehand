@@ -499,7 +499,7 @@ test('right-click on a row offers Checkout, which posts checkout(hash); double-c
   // Right-click an unselected row: it becomes the single selection and the menu offers Checkout.
   await rows.nth(2).click({ button: 'right' });
   await expect(rows.nth(2)).toHaveClass(/selected/);
-  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Cherry-Pick', 'Checkout', 'Compare with Local', 'Revert Commit']);
+  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Cherry-Pick', 'Checkout', 'Compare with Local', 'Revert Commit', 'Edit Commit Message…']);
   await p.screenshot({ path: 'test-results/screenshots/011-context-menu.png' });
   await menu.getByText('Checkout').click();
   await expect(menu).toHaveCount(0);
@@ -518,7 +518,7 @@ test('right-click on a row offers Checkout, which posts checkout(hash); double-c
   await rows.nth(6).click({ modifiers: ['Shift'] });
   await rows.nth(5).click({ button: 'right' });
   await expect(p.locator('.row.selected')).toHaveCount(2);
-  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Cherry-Pick 2 Commits', 'Checkout', 'Compare with Local', 'Revert 2 Commits']);
+  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Cherry-Pick 2 Commits', 'Checkout', 'Compare with Local', 'Revert 2 Commits', 'Edit Commit Message…']);
   await expect(menu.getByText('Checkout')).toBeDisabled();
   await menu.getByText('Checkout').dispatchEvent('click');
   expect(await checkouts()).toHaveLength(1);
@@ -947,7 +947,7 @@ test('019: menu in Rider order with separators; Copy Revision Number and Cmd/Ctr
   await rows.nth(1).click({ modifiers: ['ControlOrMeta'] });
   await rows.nth(1).click({ button: 'right' });
   const kinds = await menu.locator('> *').evaluateAll((els) => els.map((el) => el.className === 'menu-separator' ? '|' : el.textContent));
-  expect(kinds).toEqual(['Copy Revision Number', 'Cherry-Pick 2 Commits', '|', 'Checkout', 'Compare with Local', '|', 'Revert 2 Commits']);
+  expect(kinds).toEqual(['Copy Revision Number', 'Cherry-Pick 2 Commits', '|', 'Checkout', 'Compare with Local', '|', 'Revert 2 Commits', '|', 'Edit Commit Message…']);
   await expect(menu.getByText('Checkout')).toBeDisabled();
   await expect(menu.getByText('Copy Revision Number')).toBeEnabled();
   await p.screenshot({ path: 'test-results/screenshots/019-menu.png' });
@@ -1061,4 +1061,107 @@ test('021: the banner names the stopped operation (revert or cherry-pick); Conti
   await send({ type: 'commits', skip: 0, commits, stopped: { op: 'revert', at: commits[5]!.hash } });
   await expect(banner).toContainText(`Revert stopped at ${commits[5]!.hash.slice(0, 8)}:`);
   await expect(p.locator('.sequencer-error')).toHaveCount(0);
+});
+
+test('022: Edit Commit Message… (menu and F2) for one commit in HEAD; the dialog pre-fills, guards Save, and Cmd/Ctrl+Enter / Esc work; the edited commit stays selected', async ({ page: p }) => {
+  await p.addInitScript(() => {
+    const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
+    w.posted = [];
+    w.acquireVsCodeApi = () => ({ postMessage: (m: unknown) => w.posted.push(m) });
+  });
+  await p.goto(page);
+  const send = (m: unknown) => p.evaluate((msg) => window.postMessage(msg, '*'), m);
+  const posted = () => p.evaluate(() => (window as unknown as { posted: { type: string }[] }).posted);
+  const edits = async () => (await posted()).filter((m) => m.type === 'editMessage');
+  // Row 0: a child of HEAD (row 1). Row 3 merges row 4 and row 10. Row 12: a side commit HEAD doesn't reach.
+  const history = commits.map((c, i) => ({
+    ...c,
+    refs: i === 1 ? ['HEAD -> refs/heads/main'] : [],
+    parents: i === 3 ? [commits[4]!.hash, commits[10]!.hash] : i === 11 ? [commits[13]!.hash] : i < 24 ? [commits[i + 1]!.hash] : [],
+  }));
+  await send({ type: 'commits', skip: 0, commits: history });
+  const rows = p.locator('.row');
+  const item = p.locator('.menu').getByText('Edit Commit Message…');
+  const dialog = p.locator('.edit-dialog');
+  const box = dialog.locator('textarea');
+  const save = dialog.getByText('Save');
+  const enabledFor = async (i: number) => {
+    await rows.nth(i).click();
+    await rows.nth(i).click({ button: 'right' });
+    const enabled = await item.isEnabled();
+    await p.keyboard.press('Escape');
+    return enabled;
+  };
+  expect(await enabledFor(1)).toBe(true); // HEAD
+  expect(await enabledFor(3)).toBe(true); // a merge
+  expect(await enabledFor(10)).toBe(true); // reached only through the merge
+  expect(await enabledFor(0)).toBe(false); // not in HEAD
+  expect(await enabledFor(12)).toBe(false);
+  await rows.nth(2).click();
+  await rows.nth(3).click({ modifiers: ['Shift'] });
+  await rows.nth(3).click({ button: 'right' });
+  await expect(item).toBeDisabled();
+  await item.dispatchEvent('click');
+  await p.keyboard.press('Escape');
+  // F2 does nothing where the menu item is disabled.
+  await rows.nth(0).click();
+  await p.keyboard.press('F2');
+  await send({ type: 'details', details: { ...history[0]!, message: 'Commit number 0' } });
+  await expect(p.locator('.info')).toContainText('Commit number 0');
+  await expect(dialog).toHaveCount(0);
+  // An edit still waiting for its details is dropped when the selection moves away and back.
+  await rows.nth(4).click({ button: 'right' });
+  await item.click();
+  await rows.nth(5).click();
+  await rows.nth(4).click();
+  await send({ type: 'details', details: { ...history[4]!, message: 'Commit number 4' } });
+  await expect(p.locator('.info')).toContainText('Commit number 4');
+  await expect(dialog).toHaveCount(0);
+
+  // The dialog opens once the commit's full message arrives.
+  const message = 'Commit number 2\n\nThe body,\non two lines.';
+  await rows.nth(2).click({ button: 'right' });
+  await item.click();
+  await expect(dialog).toHaveCount(0);
+  await send({ type: 'details', details: { ...history[2]!, message } });
+  await expect(dialog).toBeVisible();
+  await expect(box).toHaveValue(message);
+  await expect(box).toBeFocused();
+  await expect(save).toBeDisabled(); // unchanged
+  await box.fill('   \n');
+  await expect(save).toBeDisabled(); // empty
+  await box.fill('Reworded\n\nNew body');
+  await expect(save).toBeEnabled();
+  await p.screenshot({ path: 'test-results/screenshots/022-dialog.png' });
+  await p.keyboard.press('ControlOrMeta+Enter');
+  await expect(dialog).toHaveCount(0);
+  expect(await edits()).toEqual([{ type: 'editMessage', hash: commits[2]!.hash, message: 'Reworded\n\nNew body' }]);
+
+  // F2 opens it from the list; Esc and Cancel close it without posting; Save posts.
+  await p.locator('.commits').focus();
+  await p.keyboard.press('F2');
+  await expect(box).toHaveValue(message);
+  await p.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await p.keyboard.press('F2');
+  await box.fill('changed');
+  await dialog.getByText('Cancel').click();
+  await expect(dialog).toHaveCount(0);
+  await p.keyboard.press('ControlOrMeta+Enter'); // closed: nothing to apply
+  await p.keyboard.press('F2');
+  await box.fill('Saved by click');
+  await save.click();
+  expect(await edits()).toEqual([
+    { type: 'editMessage', hash: commits[2]!.hash, message: 'Reworded\n\nNew body' },
+    { type: 'editMessage', hash: commits[2]!.hash, message: 'Saved by click' },
+  ]);
+
+  // The extension answers edited: the reload selects the commit under its new hash, and the pane follows it.
+  const fresh = (i: number) => `ed${i}${'0'.repeat(37)}`;
+  const rewritten = history.map((c, i) => (i <= 2 ? { ...c, hash: fresh(i), subject: i === 2 ? 'Saved by click' : c.subject } : c));
+  await send({ type: 'edited', hash: commits[2]!.hash, newHash: fresh(2) });
+  await expect.poll(async () => (await posted()).at(-1)).toEqual({ type: 'loadCommits', skip: 0, limit: 1000 });
+  await send({ type: 'commits', skip: 0, limit: 1000, commits: rewritten });
+  await expect(p.locator('.row.selected .hash')).toHaveText([fresh(2).slice(0, 8)]);
+  expect((await posted()).filter((m) => m.type === 'commitDetails').at(-1)).toEqual({ type: 'commitDetails', hash: fresh(2) });
 });

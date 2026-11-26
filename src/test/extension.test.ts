@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { ChangedFile, Commit, CommitDetails } from '../core/git';
 import { CHERRY_PICK_DIRTY, gitError, REVERT_DIRTY, STASH_KEPT } from '../core/git';
-import { checkout, handleMessage, historyView, repoDir, watchRepo, webviewHtml } from '../extension/extension';
+import { checkout, editCommitMessage, handleMessage, historyView, repoDir, watchRepo, webviewHtml } from '../extension/extension';
 
 // Workspace repo (.vscode-test.mjs): "init" adds file.txt ("old"), "modify" changes it to "new".
 const commitNamed = async (subject: string) =>
@@ -703,5 +703,78 @@ suite('revert and cherry-pick', () => {
     assert.strictEqual(await stopped(), undefined);
     assert.strictEqual(git('log', '-1', '--format=%s'), 'pick 1');
     assert.strictEqual(git('rev-parse', 'HEAD~1'), ours);
+  });
+});
+
+suite('edit commit message', () => {
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: repoDir(), encoding: 'utf8', stdio: 'pipe' }).trim();
+  const file = () => join(repoDir(), 'file.txt');
+  let tip = '';
+  suiteSetup(() => {
+    git('config', 'user.name', 't');
+    git('config', 'user.email', 't@t');
+  });
+  setup(() => {
+    tip = git('rev-parse', 'HEAD');
+  });
+  teardown(() => {
+    git('reset', '-q', '--hard', tip);
+    for (const key of ['branch.integration-branch.remote', 'branch.integration-branch.merge']) {
+      try {
+        git('config', '--unset', key);
+      } catch {
+        // not set
+      }
+    }
+    try {
+      git('remote', 'remove', 'origin');
+    } catch {
+      // no remote
+    }
+  });
+  const noModal = () => {
+    throw new Error('no force-push warning expected');
+  };
+
+  test('stagehand.editMessage changes the message and keeps the working tree', async () => {
+    writeFileSync(file(), 'dirty\n');
+    const parent = git('rev-parse', 'HEAD~1');
+    const fresh = await vscode.commands.executeCommand<string>('stagehand.editMessage', parent, 'init, reworded');
+    assert.strictEqual(git('rev-parse', 'HEAD~1'), fresh);
+    assert.strictEqual(git('log', '-1', '--format=%B', fresh), 'init, reworded');
+    assert.strictEqual(git('log', '-1', '--format=%s'), git('log', '-1', '--format=%s', tip));
+    assert.strictEqual(git('rev-parse', 'HEAD^{tree}'), git('rev-parse', `${tip}^{tree}`));
+    assert.strictEqual(readFileSync(file(), 'utf8'), 'dirty\n');
+    assert.strictEqual(git('reflog', '-1', '--format=%gs', 'integration-branch'), `stagehand: reword ${parent.slice(0, 8)}`);
+  });
+
+  test('the webview\'s editMessage message answers edited with the new hash; a refusal posts its reason', async () => {
+    const posted: unknown[] = [];
+    await handleMessage({ type: 'editMessage', hash: tip, message: 'reworded tip' }, (r) => posted.push(r));
+    const refused: unknown[] = [];
+    const fresh = git('rev-parse', 'HEAD');
+    assert.notStrictEqual(fresh, tip);
+    assert.deepStrictEqual(posted, [{ type: 'edited', hash: tip, newHash: fresh }]);
+    assert.strictEqual(git('log', '-1', '--format=%s'), 'reworded tip');
+    await handleMessage({ type: 'editMessage', hash: tip, message: 'again' }, (r) => refused.push(r));
+    assert.deepStrictEqual(refused, [{ type: 'sequencerError', message: `Can't edit: ${tip.slice(0, 8)} isn't in the current branch` }]);
+    assert.strictEqual(git('rev-parse', 'HEAD'), fresh);
+  });
+
+  test('a commit the upstream has asks before editing (Cancel changes nothing); without an upstream nothing is asked', async () => {
+    assert.ok(await editCommitMessage(tip, 'no upstream', noModal));
+    git('reset', '-q', '--hard', tip);
+    git('remote', 'add', 'origin', 'https://example.invalid/r.git');
+    git('update-ref', 'refs/remotes/origin/integration-branch', tip);
+    git('config', 'branch.integration-branch.remote', 'origin');
+    git('config', 'branch.integration-branch.merge', 'refs/heads/integration-branch');
+    const asked: string[] = [];
+    assert.strictEqual(await editCommitMessage(tip, 'pushed', async (h) => (asked.push(h), false)), undefined);
+    assert.deepStrictEqual(asked, [tip]);
+    assert.strictEqual(git('rev-parse', 'HEAD'), tip);
+    const fresh = await editCommitMessage(tip, 'pushed', async (h) => (asked.push(h), true));
+    assert.strictEqual(git('rev-parse', 'HEAD'), fresh);
+    assert.strictEqual(git('log', '-1', '--format=%s'), 'pushed');
+    git('update-ref', '-d', 'refs/remotes/origin/integration-branch');
   });
 });

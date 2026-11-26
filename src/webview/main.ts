@@ -6,6 +6,7 @@ export type Message =
   | { type: 'commits'; skip: number; limit?: number; commits: Commit[]; stopped?: { op: 'revert' | 'cherry-pick'; at: string } }
   | { type: 'sequencerError'; message: string }
   | { type: 'refresh' }
+  | { type: 'edited'; hash: string; newHash: string }
   | { type: 'details'; details: CommitDetails }
   | { type: 'branches'; hash: string; branches: string[] }
   | { type: 'changedFiles'; hash: string | string[]; files: ChangedFile[]; gap?: number; error?: string }
@@ -120,7 +121,83 @@ let showBranches = false; // the "In N branches" list is expanded
 let loading = true; // the first page is requested on load
 let done = false; // a short page came back: no more commits
 let stopped: { op: 'revert' | 'cherry-pick'; at: string } | undefined; // a stopped revert/cherry-pick (from the last first-page reply)
-let sequencerError: string | undefined; // why the last revert/cherry-pick/continue/abort was refused
+let sequencerError: string | undefined; // why the last revert/cherry-pick/continue/abort/edit was refused
+let details: CommitDetails | undefined; // the details last shown in the pane
+let editing: string | undefined; // the commit whose message dialog waits for its details
+let renamed: { from: string; to: string } | undefined; // an edited commit's new hash, for the next first page to select
+
+const isHead = (c: Commit) => c.refs.some((r) => r === 'HEAD' || r.startsWith('HEAD -> '));
+
+/** One commit selected, and it is HEAD or reachable from it through the loaded commits' parents. */
+function canEdit(): boolean {
+  const target = selectedHash();
+  const head = commits.find(isHead);
+  if (!target || !head) return false;
+  // ponytail: walks the loaded commits on each call (menu open / F2); cache per page if that gets slow.
+  const byHash = new Map(commits.map((c) => [c.hash, c]));
+  const seen = new Set<string>();
+  const todo = [head.hash];
+  while (todo.length) {
+    const h = todo.pop()!;
+    if (h === target) return true;
+    if (seen.has(h)) continue;
+    seen.add(h);
+    todo.push(...(byHash.get(h)?.parents ?? []));
+  }
+  return false;
+}
+
+/** Opens the message dialog for the selected commit once its details (the full message) are here. */
+function editMessage(): void {
+  editing = selectedHash();
+  if (details && details.hash === editing) showEditor(details);
+}
+
+/** A modal dialog with the full message; Save (or Cmd/Ctrl+Enter) posts editMessage, Esc or Cancel closes it. */
+function showEditor(d: CommitDetails): void {
+  editing = undefined;
+  document.querySelector('.edit-dialog')?.remove();
+  const dialog = document.createElement('dialog');
+  dialog.className = 'edit-dialog';
+  dialog.setAttribute('aria-label', 'Edit Commit Message');
+  const box = document.createElement('textarea');
+  box.className = 'edit-message';
+  box.value = d.message;
+  box.spellcheck = false;
+  const button = (text: string, cls: string) => Object.assign(document.createElement('button'), { textContent: text, className: cls });
+  const save = button('Save', 'edit-save');
+  const cancel = button('Cancel', 'edit-cancel');
+  const update = () => {
+    save.disabled = !box.value.trim() || box.value === d.message;
+  };
+  const apply = () => {
+    if (save.disabled) return;
+    dialog.close();
+    post({ type: 'editMessage', hash: d.hash, message: box.value });
+  };
+  box.addEventListener('input', update);
+  box.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      apply();
+    }
+  });
+  save.addEventListener('click', apply);
+  cancel.addEventListener('click', () => dialog.close());
+  // Esc closes a modal <dialog> natively.
+  dialog.addEventListener('close', () => {
+    dialog.remove();
+    document.querySelector<HTMLElement>('.commits')?.focus();
+  });
+  const buttons = document.createElement('div');
+  buttons.className = 'edit-buttons';
+  buttons.append(cancel, save);
+  dialog.append(cell('edit-title', `Edit Commit Message — ${d.hash.slice(0, 8)}`), box, buttons);
+  update();
+  document.body.append(dialog);
+  dialog.showModal();
+  box.focus();
+}
 
 /** Reloads every loaded commit (at least a page); the skip-0 reply keeps the selection. */
 function refresh(): void {
@@ -143,8 +220,8 @@ function renderRows(list: HTMLElement): void {
   for (let i = first; i < last; i++) {
     const c = commits[i]!;
     const row = document.createElement('div');
-    const isHead = c.refs.some((r) => r === 'HEAD' || r.startsWith('HEAD -> '));
-    row.className = `row${selected.has(i) ? ' selected' : ''}${isHead ? ' head' : ''}${c.parents.length > 1 ? ' merge' : ''}`;
+    const head = isHead(c);
+    row.className = `row${selected.has(i) ? ' selected' : ''}${head ? ' head' : ''}${c.parents.length > 1 ? ' merge' : ''}`;
     row.dataset.index = String(i);
     row.style.top = `${i * ROW_HEIGHT}px`;
     row.title = c.hash;
@@ -154,7 +231,7 @@ function renderRows(list: HTMLElement): void {
     title.append(cell('subject', c.subject), labels(c.refs));
     const date = cell('date', formatDate(c.authorDate));
     date.title = new Date(c.authorDate).toLocaleString(undefined, { dateStyle: 'full', timeStyle: 'long' });
-    row.append(graphCell(graphRows[i]!, isHead), title, cell('author', c.authorName), date, cell('hash', c.hash.slice(0, 8)));
+    row.append(graphCell(graphRows[i]!, head), title, cell('author', c.authorName), date, cell('hash', c.hash.slice(0, 8)));
     els.push(row);
   }
   rows.replaceChildren(...els);
@@ -167,6 +244,7 @@ const range = (a: number, b: number) => Array.from({ length: Math.abs(a - b) + 1
 function select(list: HTMLElement, i: number, mode: 'plain' | 'toggle' | 'extend' = 'plain'): void {
   if (i < 0 || i >= commits.length) return;
   if (mode === 'plain' && selected.size === 1 && selected.has(i)) return;
+  editing = undefined; // a dialog still waiting for its details is dropped once the selection changes
   if (mode === 'extend' && anchor >= 0) selected = new Set(range(anchor, i));
   else if (mode === 'toggle') {
     if (!selected.delete(i)) selected.add(i);
@@ -201,7 +279,7 @@ function showSelection(): void {
   if (hashes.length) post({ type: 'changedFiles', hash: hashes });
 }
 
-/** The row context menu, in Rider's order: Copy, Cherry-Pick (no merges) │ Checkout, Compare with Local (one commit only) │ Revert (no merges). Inapplicable items are disabled. */
+/** The row context menu, in Rider's order: Copy, Cherry-Pick (no merges) │ Checkout, Compare with Local (one commit only) │ Revert (no merges) │ Edit Commit Message… (one commit in HEAD). Inapplicable items are disabled. */
 function showMenu(x: number, y: number): void {
   hideMenu();
   const picked = [...selected].sort((a, b) => a - b).map((i) => commits[i]!);
@@ -210,7 +288,7 @@ function showMenu(x: number, y: number): void {
   menu.setAttribute('role', 'menu');
   menu.style.left = `${x}px`;
   menu.style.top = `${y}px`;
-  const item = (text: string, msg: unknown, disabled = false) => {
+  const item = (text: string, msg: unknown, disabled = false) => { // msg: posted, or a function to call
     const el = document.createElement('button');
     el.className = 'menu-item';
     el.setAttribute('role', 'menuitem');
@@ -219,7 +297,8 @@ function showMenu(x: number, y: number): void {
     if (!disabled) {
       el.addEventListener('click', () => {
         hideMenu();
-        post(msg);
+        if (typeof msg === 'function') msg();
+        else post(msg);
       });
     }
     return el;
@@ -232,7 +311,8 @@ function showMenu(x: number, y: number): void {
     item('Checkout', { type: 'checkout', hash: picked[0]!.hash }, picked.length !== 1),
     item('Compare with Local', { type: 'compareWithLocal', hash: picked[0]!.hash }, picked.length !== 1), separator());
   menu.append(item(picked.length === 1 ? 'Revert Commit' : `Revert ${picked.length} Commits`,
-    { type: 'revert', hash: hashes }, hasMerge));
+    { type: 'revert', hash: hashes }, hasMerge), separator(),
+    item('Edit Commit Message…', editMessage, !canEdit()));
   document.body.append(menu);
   menu.querySelector<HTMLElement>('.menu-item:not(:disabled)')?.focus();
 }
@@ -376,7 +456,10 @@ export function render(root: HTMLElement, msg: Message): void {
   if (msg.type === 'details') {
     const pane = root.querySelector<HTMLElement>('.info');
     // Ignore late replies for a commit that is no longer selected.
-    if (pane && msg.details.hash === selectedHash()) renderDetails(pane, msg.details);
+    if (!pane || msg.details.hash !== selectedHash()) return;
+    details = msg.details;
+    renderDetails(pane, msg.details);
+    if (editing === msg.details.hash) showEditor(msg.details);
     return;
   }
   if (msg.type === 'branches') {
@@ -396,6 +479,11 @@ export function render(root: HTMLElement, msg: Message): void {
     refresh();
     return;
   }
+  if (msg.type === 'edited') {
+    renamed = { from: msg.hash, to: msg.newHash };
+    refresh();
+    return;
+  }
   loading = false;
   done = msg.commits.length < (msg.limit ?? PAGE);
   const existing = root.querySelector<HTMLElement>('.commits');
@@ -411,8 +499,12 @@ export function render(root: HTMLElement, msg: Message): void {
     return;
   }
   // A refresh (or any first page): keep the selected commits that are still in the list, by hash.
-  const before = [...selected].map((i) => commits[i]!.hash);
-  const hashAt = (i: number) => commits[i]?.hash ?? '';
+  // An edited commit is kept selected under its new hash.
+  const rename = (h: string) => (h === renamed?.from ? renamed.to : h);
+  const before = [...selected].map((i) => rename(commits[i]!.hash));
+  const hashAt = (i: number) => rename(commits[i]?.hash ?? '');
+  const wasRenamed = renamed !== undefined;
+  renamed = undefined;
   const [anchorHash, leadHash] = [hashAt(anchor), hashAt(lead)];
   commits = msg.commits;
   ({ rows: graphRows, state: lanes } = graph(commits));
@@ -427,7 +519,7 @@ export function render(root: HTMLElement, msg: Message): void {
   list.querySelector<HTMLElement>('.spacer')!.style.height = `${commits.length * ROW_HEIGHT}px`;
   renderRows(list);
   // Same commits still selected: the pane already shows them. Otherwise point it at what's left (or clear it).
-  if (selected.size !== before.length || !existing) showSelection();
+  if (selected.size !== before.length || !existing || wasRenamed) showSelection();
 }
 
 /** Above the list: a refused revert/cherry-pick's reason, and the stopped-sequence banner with Continue and Abort. */
@@ -478,6 +570,11 @@ function build(root: HTMLElement): HTMLElement {
     if (e.key.toLowerCase() === 'c' && (e.ctrlKey || e.metaKey) && selected.size) {
       e.preventDefault();
       post(copyMessage());
+      return;
+    }
+    if (e.key === 'F2') {
+      e.preventDefault();
+      if (canEdit()) editMessage();
       return;
     }
     const step = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
