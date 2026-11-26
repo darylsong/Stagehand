@@ -109,10 +109,12 @@ test('click selects a row, Down moves the selection, and the pane shows the post
   // Moving past the bottom of the viewport keeps the selection visible; Up moves back.
   await rows.nth(1).click();
   for (let i = 0; i < 20; i++) await p.keyboard.press('ArrowDown');
-  await expect(rows.nth(21)).toHaveClass(/selected/);
-  await expect(rows.nth(21)).toBeInViewport({ ratio: 1 });
+  // The list is virtual (rows above the viewport aren't in the DOM), so find rows by their commit index.
+  const row = (i: number) => p.locator(`.row[data-index="${i}"]`);
+  await expect(row(21)).toHaveClass(/selected/);
+  await expect(row(21)).toBeInViewport({ ratio: 1 });
   await p.keyboard.press('ArrowUp');
-  await expect(rows.nth(20)).toHaveClass(/selected/);
+  await expect(row(20)).toHaveClass(/selected/);
   await p.screenshot({ path: 'test-results/screenshots/005-scrolled.png' });
 });
 
@@ -212,3 +214,63 @@ for (const state of states) {
     await p.screenshot({ path: `test-results/screenshots/002-${state.kind}.png` });
   });
 }
+
+test('a 50k-commit history renders only the visible rows and pages in more at the bottom, one request at a time', async ({ page: p }) => {
+  await p.addInitScript(() => {
+    const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
+    w.posted = [];
+    w.acquireVsCodeApi = () => ({ postMessage: (m: unknown) => w.posted.push(m) });
+  });
+  await p.goto(page);
+  // Build the fixture in the page: `count` commits starting at index `skip`.
+  const postPage = (skip: number, count: number) => p.evaluate(([skip, count]) => {
+    const commits = Array.from({ length: count }, (_, k) => {
+      const i = skip + k;
+      return {
+        hash: i.toString(16).padStart(8, '0').padEnd(40, 'a'), parents: [], subject: `Commit ${i}`, authorName: 'Alice',
+        authorEmail: 'a@example.com', authorDate: '2024-01-01T00:00:00Z', refs: [],
+      };
+    });
+    window.postMessage({ type: 'commits', skip, commits }, '*');
+  }, [skip, count] as const);
+  const loads = () => p.evaluate(() => (window as unknown as { posted: { type: string }[] }).posted.filter((m) => m.type === 'loadCommits'));
+  const scrollTo = (top: number | 'bottom') => p.locator('.commits').evaluate((el, top) => {
+    el.scrollTop = top === 'bottom' ? el.scrollHeight : top;
+  }, top);
+  const row = (i: number) => p.locator(`.row[data-index="${i}"]`);
+
+  await postPage(0, 50_000);
+  await expect(row(0).locator('.subject')).toHaveText('Commit 0');
+  expect(await p.locator('.row').count()).toBeLessThan(200);
+
+  await scrollTo(25_000 * 22);
+  await expect(row(25_000)).toBeInViewport();
+  expect(await p.locator('.row').count()).toBeLessThan(200);
+  expect(await loads()).toEqual([{ type: 'loadCommits', skip: 0, limit: 1000 }]);
+  await p.screenshot({ path: 'test-results/screenshots/003-mid-scroll.png' });
+
+  // Scrolling around the end while the request is in flight doesn't send it again.
+  for (const [top, visible] of [['bottom', 49_999], [49_900 * 22, 49_900], ['bottom', 49_999]] as const) {
+    await scrollTo(top);
+    await expect(row(visible)).toBeInViewport();
+  }
+  expect(await loads()).toEqual([
+    { type: 'loadCommits', skip: 0, limit: 1000 },
+    { type: 'loadCommits', skip: 50_000, limit: 1000 },
+  ]);
+  expect(await p.locator('.row').count()).toBeLessThan(200);
+
+  // A full page appends and the next request continues from it.
+  await postPage(50_000, 1000);
+  await scrollTo('bottom');
+  await expect(row(50_999).locator('.subject')).toHaveText('Commit 50999');
+  expect((await loads()).at(-1)).toEqual({ type: 'loadCommits', skip: 51_000, limit: 1000 });
+
+  // A short page means the end: no more requests.
+  await postPage(51_000, 10);
+  await scrollTo('bottom');
+  await expect(row(51_009)).toBeInViewport();
+  await scrollTo(0);
+  await scrollTo('bottom');
+  expect(await loads()).toHaveLength(3);
+});

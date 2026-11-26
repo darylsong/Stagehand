@@ -104,6 +104,14 @@ suite('webview message handling', () => {
     assert.deepStrictEqual(reply.commits.map((c) => c.subject), ['modify', 'init']);
   });
 
+  test('loadCommits with skip/limit replies with that page of the real log', async () => {
+    const replies: unknown[] = [];
+    await handleMessage({ type: 'loadCommits', skip: 1, limit: 1 }, (r) => replies.push(r));
+    const reply = replies[0] as { type: string; skip: number; commits: Commit[] };
+    assert.strictEqual(reply.skip, 1);
+    assert.deepStrictEqual(reply.commits.map((c) => c.subject), ['init']);
+  });
+
   test('a failure replies with an error message', async () => {
     const replies: unknown[] = [];
     await handleMessage({ type: 'loadCommits', skip: 0, limit: 1000 }, (r) => replies.push(r), async () => {

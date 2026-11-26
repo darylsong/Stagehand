@@ -7,9 +7,11 @@
     /* Fallbacks are for the standalone page (browser/Playwright); inside VS Code the theme variables win. */
     body { font-family: var(--vscode-font-family, system-ui, sans-serif); font-size: var(--vscode-font-size, 13px); color: var(--vscode-foreground, #333); background: var(--vscode-panel-background, #fff); margin: 0; padding: 0; }
     #app { display: flex; height: 100vh; }
-    .commits { flex: 1; min-width: 0; overflow: auto; outline: none; }
+    .commits { flex: 1; min-width: 0; overflow: auto; outline: none; position: relative; }
+    .spacer { width: 1px; }
+    .rows { position: absolute; top: 0; left: 0; right: 0; }
     .details { width: 40%; overflow: auto; padding: 8px; border-left: 1px solid var(--vscode-panel-border, #ccc); }
-    .row { display: flex; gap: 12px; padding: 0 8px; line-height: 22px; white-space: nowrap; }
+    .row { position: absolute; left: 0; right: 0; box-sizing: border-box; height: 22px; display: flex; gap: 12px; padding: 0 8px; line-height: 22px; white-space: nowrap; } /* height = ROW_HEIGHT in main.ts */
     .row:hover { background: var(--vscode-list-hoverBackground, #f0f0f0); }
     .row.selected { background: var(--vscode-list-inactiveSelectionBackground, #e4e6f1); }
     .commits:focus .row.selected { background: var(--vscode-list-activeSelectionBackground, #0060c0); color: var(--vscode-list-activeSelectionForeground, #fff); }

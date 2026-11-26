@@ -29,18 +29,54 @@ function cell(cls: string, text: string): HTMLElement {
   return el;
 }
 
+export const ROW_HEIGHT = 22; // px; must match .row height in index.html
+export const PAGE = 1000;
+const OVERSCAN = 10; // rows rendered above and below the viewport
+const PREFETCH = 200; // request the next page when the viewport is this many rows from the end
+
 let commits: Commit[] = [];
 let selected = -1;
+let loading = true; // the first page is requested on load
+let done = false; // a short page came back: no more commits
+
+function loadMore(): void {
+  loading = true;
+  post({ type: 'loadCommits', skip: commits.length, limit: PAGE });
+}
+
+/** Renders only the rows in (and just around) the viewport; requests the next page near the end. */
+function renderRows(list: HTMLElement): void {
+  const rows = list.querySelector<HTMLElement>('.rows')!;
+  const first = Math.max(0, Math.floor(list.scrollTop / ROW_HEIGHT) - OVERSCAN);
+  const last = Math.min(commits.length, Math.ceil((list.scrollTop + list.clientHeight) / ROW_HEIGHT) + OVERSCAN);
+  const els: HTMLElement[] = [];
+  for (let i = first; i < last; i++) {
+    const c = commits[i]!;
+    const row = document.createElement('div');
+    row.className = i === selected ? 'row selected' : 'row';
+    row.dataset.index = String(i);
+    row.style.top = `${i * ROW_HEIGHT}px`;
+    row.title = c.hash;
+    row.setAttribute('role', 'option');
+    row.setAttribute('aria-selected', String(i === selected));
+    row.append(
+      cell('subject', c.subject), cell('author', c.authorName),
+      cell('date', relativeDate(c.authorDate)), cell('hash', c.hash.slice(0, 8)),
+    );
+    els.push(row);
+  }
+  rows.replaceChildren(...els);
+  if (!loading && !done && last >= commits.length - PREFETCH) loadMore();
+}
 
 function select(list: HTMLElement, i: number): void {
   if (i < 0 || i >= commits.length || i === selected) return;
-  list.children[selected]?.classList.remove('selected');
-  list.children[selected]?.setAttribute('aria-selected', 'false');
   selected = i;
-  const row = list.children[i] as HTMLElement;
-  row.classList.add('selected');
-  row.setAttribute('aria-selected', 'true');
-  row.scrollIntoView({ block: 'nearest' });
+  // Keep the selected row in view (the virtual-list version of scrollIntoView({block:'nearest'})).
+  const top = i * ROW_HEIGHT;
+  if (top < list.scrollTop) list.scrollTop = top;
+  else if (top + ROW_HEIGHT > list.scrollTop + list.clientHeight) list.scrollTop = top + ROW_HEIGHT - list.clientHeight;
+  renderRows(list);
   const hash = commits[i]!.hash;
   post({ type: 'commitDetails', hash });
   post({ type: 'changedFiles', hash });
@@ -110,6 +146,17 @@ export function render(root: HTMLElement, msg: Message): void {
     if (pane && msg.details.hash === commits[selected]?.hash) renderDetails(pane, msg.details);
     return;
   }
+  loading = false;
+  done = msg.commits.length < PAGE;
+  const existing = root.querySelector<HTMLElement>('.commits');
+  if (msg.skip > 0) {
+    // Next page: append if it continues the list we have; drop anything else (e.g. a page for an old list).
+    if (!existing || msg.skip !== commits.length) return;
+    commits = commits.concat(msg.commits);
+    existing.querySelector<HTMLElement>('.spacer')!.style.height = `${commits.length * ROW_HEIGHT}px`;
+    renderRows(existing);
+    return;
+  }
   commits = msg.commits;
   selected = -1;
   const list = document.createElement('div');
@@ -117,18 +164,18 @@ export function render(root: HTMLElement, msg: Message): void {
   list.tabIndex = 0;
   list.setAttribute('role', 'listbox');
   list.setAttribute('aria-label', 'Commits');
-  for (const [i, c] of commits.entries()) {
-    const row = document.createElement('div');
-    row.className = 'row';
-    row.title = c.hash;
-    row.setAttribute('role', 'option');
-    row.append(
-      cell('subject', c.subject), cell('author', c.authorName),
-      cell('date', relativeDate(c.authorDate)), cell('hash', c.hash.slice(0, 8)),
-    );
-    row.addEventListener('click', () => select(list, i));
-    list.append(row);
-  }
+  // ponytail: one tall spacer gives the scrollbar its full height; fine up to Chromium's ~33M px max (~1.5M rows).
+  const spacer = document.createElement('div');
+  spacer.className = 'spacer';
+  spacer.style.height = `${commits.length * ROW_HEIGHT}px`;
+  const rows = document.createElement('div');
+  rows.className = 'rows';
+  list.append(spacer, rows);
+  list.addEventListener('scroll', () => renderRows(list));
+  list.addEventListener('click', (e) => {
+    const row = (e.target as HTMLElement).closest<HTMLElement>('.row');
+    if (row) select(list, Number(row.dataset.index));
+  });
   list.addEventListener('keydown', (e) => {
     const step = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
     if (!step) return;
@@ -143,10 +190,15 @@ export function render(root: HTMLElement, msg: Message): void {
   files.className = 'files';
   pane.append(info, files);
   root.replaceChildren(list, pane);
+  renderRows(list);
 }
 
 const app = document.getElementById('app');
 if (app) {
   window.addEventListener('message', (e: MessageEvent<Message>) => render(app, e.data));
-  post({ type: 'loadCommits', skip: 0, limit: 1000 });
+  window.addEventListener('resize', () => {
+    const list = app.querySelector<HTMLElement>('.commits');
+    if (list) renderRows(list);
+  });
+  post({ type: 'loadCommits', skip: 0, limit: PAGE });
 }
