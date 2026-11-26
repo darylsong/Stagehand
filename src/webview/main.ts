@@ -1,7 +1,8 @@
 import type { ChangedFile, Commit, CommitDetails, ErrorKind } from '../core/git';
 
 export type Message =
-  | { type: 'commits'; skip: number; commits: Commit[] }
+  | { type: 'commits'; skip: number; limit?: number; commits: Commit[] }
+  | { type: 'refresh' }
   | { type: 'details'; details: CommitDetails }
   | { type: 'changedFiles'; hash: string | string[]; files: ChangedFile[]; gap?: number; error?: string }
   | { type: 'error'; kind: ErrorKind; message: string };
@@ -54,6 +55,13 @@ let filesKey = ''; // the changedFiles request whose reply we're waiting for
 let loading = true; // the first page is requested on load
 let done = false; // a short page came back: no more commits
 
+/** Reloads every loaded commit (at least a page); the skip-0 reply keeps the selection. */
+function refresh(): void {
+  loading = true;
+  // ponytail: reloads all loaded rows in one request; fine for tens of thousands, page it if that gets slow.
+  post({ type: 'loadCommits', skip: 0, limit: Math.max(PAGE, commits.length) });
+}
+
 function loadMore(): void {
   loading = true;
   post({ type: 'loadCommits', skip: commits.length, limit: PAGE });
@@ -105,6 +113,11 @@ function select(list: HTMLElement, i: number, mode: 'plain' | 'toggle' | 'extend
   if (top < list.scrollTop) list.scrollTop = top;
   else if (top + ROW_HEIGHT > list.scrollTop + list.clientHeight) list.scrollTop = top + ROW_HEIGHT - list.clientHeight;
   renderRows(list);
+  showSelection();
+}
+
+/** Points the details pane at the selection: details + files for one, count + combined files for several. */
+function showSelection(): void {
   const info = document.querySelector<HTMLElement>('.info')!;
   const files = document.querySelector<HTMLElement>('.files')!;
   const hashes = [...selected].sort((a, b) => a - b).map((k) => commits[k]!.hash);
@@ -215,8 +228,12 @@ export function render(root: HTMLElement, msg: Message): void {
     if (pane && msg.details.hash === selectedHash()) renderDetails(pane, msg.details);
     return;
   }
+  if (msg.type === 'refresh') {
+    refresh();
+    return;
+  }
   loading = false;
-  done = msg.commits.length < PAGE;
+  done = msg.commits.length < (msg.limit ?? PAGE);
   const existing = root.querySelector<HTMLElement>('.commits');
   if (msg.skip > 0) {
     // Next page: append if it continues the list we have; drop anything else (e.g. a page for an old list).
@@ -226,10 +243,24 @@ export function render(root: HTMLElement, msg: Message): void {
     renderRows(existing);
     return;
   }
+  // A refresh (or any first page): keep the selected commits that are still in the list, by hash.
+  const before = [...selected].map((i) => commits[i]!.hash);
+  const hashAt = (i: number) => commits[i]?.hash ?? '';
+  const [anchorHash, leadHash] = [hashAt(anchor), hashAt(lead)];
   commits = msg.commits;
-  selected = new Set();
-  anchor = lead = -1;
-  filesKey = '';
+  const index = new Map(commits.map((c, i) => [c.hash, i]));
+  selected = new Set(before.flatMap((h) => (index.has(h) ? [index.get(h)!] : [])));
+  anchor = index.get(anchorHash) ?? -1;
+  lead = index.get(leadHash) ?? -1;
+  const list = existing ?? build(root);
+  list.querySelector<HTMLElement>('.spacer')!.style.height = `${commits.length * ROW_HEIGHT}px`;
+  renderRows(list);
+  // Same commits still selected: the pane already shows them. Otherwise point it at what's left (or clear it).
+  if (selected.size !== before.length || !existing) showSelection();
+}
+
+/** Builds the list, the refresh button and the details pane. */
+function build(root: HTMLElement): HTMLElement {
   const list = document.createElement('div');
   list.className = 'commits';
   list.tabIndex = 0;
@@ -238,7 +269,6 @@ export function render(root: HTMLElement, msg: Message): void {
   // ponytail: one tall spacer gives the scrollbar its full height; fine up to Chromium's ~33M px max (~1.5M rows).
   const spacer = document.createElement('div');
   spacer.className = 'spacer';
-  spacer.style.height = `${commits.length * ROW_HEIGHT}px`;
   const rows = document.createElement('div');
   rows.className = 'rows';
   list.append(spacer, rows);
@@ -269,8 +299,19 @@ export function render(root: HTMLElement, msg: Message): void {
   const files = document.createElement('div');
   files.className = 'files';
   pane.append(info, files);
-  root.replaceChildren(list, pane);
-  renderRows(list);
+  const toolbar = document.createElement('div');
+  toolbar.className = 'toolbar';
+  const button = document.createElement('button');
+  button.className = 'refresh';
+  button.textContent = '↻ Refresh';
+  button.title = 'Reload the history';
+  button.addEventListener('click', refresh);
+  toolbar.append(button);
+  const main = document.createElement('div');
+  main.className = 'main';
+  main.append(toolbar, list);
+  root.replaceChildren(main, pane);
+  return list;
 }
 
 const app = document.getElementById('app');

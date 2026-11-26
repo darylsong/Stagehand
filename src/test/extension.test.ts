@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { ChangedFile, Commit, CommitDetails } from '../core/git';
 import { gitError, STASH_KEPT } from '../core/git';
-import { checkout, handleMessage, repoDir, webviewHtml } from '../extension/extension';
+import { checkout, handleMessage, historyView, repoDir, watchRepo, webviewHtml } from '../extension/extension';
 
 // Workspace repo (.vscode-test.mjs): "init" adds file.txt ("old"), "modify" changes it to "new".
 const commitNamed = async (subject: string) =>
@@ -118,9 +118,10 @@ suite('webview message handling', () => {
     const replies: unknown[] = [];
     await handleMessage({ type: 'loadCommits', skip: 0, limit: 1000 }, (r) => replies.push(r));
     assert.strictEqual(replies.length, 1);
-    const reply = replies[0] as { type: string; skip: number; commits: Commit[] };
+    const reply = replies[0] as { type: string; skip: number; limit: number; commits: Commit[] };
     assert.strictEqual(reply.type, 'commits');
     assert.strictEqual(reply.skip, 0);
+    assert.strictEqual(reply.limit, 1000); // the webview tells "end of history" from a reply shorter than its limit
     assert.deepStrictEqual(reply.commits.map((c) => c.subject), ['modify', 'init']);
     // Labels and the HEAD marker reach the webview as refs.
     assert.deepStrictEqual(reply.commits.map((c) => c.refs), [['HEAD -> integration-branch'], []]);
@@ -374,5 +375,61 @@ suite('checkout', () => {
 
   test('a refused checkout message posts nothing', async () => {
     await handleMessage({ type: 'checkout', hash: 'abc123' }, () => assert.fail('no reply'), async () => false);
+  });
+});
+
+suite('refresh when the repository changes', function () {
+  this.timeout(20000); // waits on the file watcher
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: repoDir(), encoding: 'utf8' }).trim();
+  const commitEmpty = (msg: string) => git('-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', 'commit', '-q', '--allow-empty', '-m', msg);
+  const until = async (what: string, ok: () => boolean | Promise<boolean>, ms = 10000) => {
+    for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 100))) if (await ok()) return;
+    assert.fail(`timed out waiting for ${what}`);
+  };
+  const first = async () => (await vscode.commands.executeCommand<Commit[]>('stagehand.history.loadCommits', { skip: 0, limit: 1000 }))[0]!.subject;
+  let disposables: vscode.Disposable[] = [];
+  let tip = '';
+  setup(() => {
+    tip = git('rev-parse', 'HEAD');
+  });
+  teardown(() => {
+    disposables.forEach((d) => d.dispose());
+    disposables = [];
+    git('reset', '-q', '--soft', tip); // drop the test commits
+    git('tag', '-d', 'watched-tag');
+  });
+
+  test('a commit plus a tag (two ref files) fire the watcher once (debounced); loadCommits returns the commit first', async () => {
+    let fired = 0;
+    disposables.push(watchRepo(repoDir(), () => fired++));
+    await new Promise((r) => setTimeout(r, 1000)); // let the watcher start and earlier suites' ref changes arrive
+    fired = 0;
+    commitEmpty('watched commit');
+    git('tag', 'watched-tag');
+    await until('the watcher', () => fired > 0);
+    await until('loadCommits to return the new commit first', async () => (await first()) === 'watched commit');
+    await new Promise((r) => setTimeout(r, 1000));
+    assert.strictEqual(fired, 1);
+  });
+
+  test('the history view posts refresh to its webview when the repo changes, and its loadCommits replies carry the new commit', async () => {
+    const posted: { type: string; commits?: Commit[] }[] = [];
+    let receive: (msg: unknown) => unknown = () => undefined;
+    const webview = {
+      options: {}, html: '', cspSource: 'csp',
+      asWebviewUri: (u: vscode.Uri) => u,
+      onDidReceiveMessage: (cb: (msg: unknown) => unknown) => { receive = cb; },
+      postMessage: (m: { type: string }) => { posted.push(m); return Promise.resolve(true); },
+    };
+    const view = { webview, onDidDispose: (cb: () => void) => disposables.push(new vscode.Disposable(cb)) };
+    historyView(vscode.Uri.file(resolve('out/webview'))).resolveWebviewView(view as unknown as vscode.WebviewView, {} as vscode.WebviewViewResolveContext, new vscode.CancellationTokenSource().token);
+    await new Promise((r) => setTimeout(r, 500));
+    commitEmpty('view refresh commit');
+    git('tag', 'watched-tag');
+    await until('the refresh message', () => posted.some((m) => m.type === 'refresh'));
+    // The webview answers refresh with loadCommits; the reply starts with the new commit.
+    await receive({ type: 'loadCommits', skip: 0, limit: 1000 });
+    await until('the commits reply', () => posted.some((m) => m.type === 'commits'));
+    assert.strictEqual(posted.find((m) => m.type === 'commits')!.commits![0]!.subject, 'view refresh commit');
   });
 });

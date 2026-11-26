@@ -96,8 +96,9 @@ export async function handleMessage(
   try {
     if (msg.type === 'loadCommits') {
       const skip = msg.skip ?? 0;
-      const commits = (await run('stagehand.history.loadCommits', { skip, limit: msg.limit ?? 1000 })) ?? [];
-      post({ type: 'commits', skip, commits });
+      const limit = msg.limit ?? 1000;
+      const commits = (await run('stagehand.history.loadCommits', { skip, limit })) ?? [];
+      post({ type: 'commits', skip, limit, commits });
     } else if (msg.type === 'commitDetails') {
       post({ type: 'details', details: await run('stagehand.history.commitDetails', msg.hash) });
     } else if (msg.type === 'changedFiles') {
@@ -109,7 +110,7 @@ export async function handleMessage(
     } else if (msg.type === 'checkout') {
       // Reload the first page so the HEAD marker moves.
       if (await run('stagehand.history.checkout', msg.hash)) {
-        post({ type: 'commits', skip: 0, commits: (await run('stagehand.history.loadCommits', { skip: 0, limit: 1000 })) ?? [] });
+        post({ type: 'commits', skip: 0, limit: 1000, commits: (await run('stagehand.history.loadCommits', { skip: 0, limit: 1000 })) ?? [] });
       }
     } else if (msg.type === 'copy') {
       await vscode.env.clipboard.writeText(String(msg.text ?? ''));
@@ -134,6 +135,41 @@ export function webviewHtml(dir: string, scriptUri: string, cspSource: string): 
     .replace('src="main.js"', `src="${scriptUri}"`);
 }
 
+/** Calls `onChange` (debounced) when the repo's HEAD, refs or packed-refs change. */
+export function watchRepo(dir: string, onChange: () => unknown, delay = 300): vscode.Disposable {
+  const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(dir, '.git/{HEAD,packed-refs,refs/**}'));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const fire = () => {
+    clearTimeout(timer);
+    timer = setTimeout(onChange, delay);
+  };
+  watcher.onDidCreate(fire);
+  watcher.onDidChange(fire);
+  watcher.onDidDelete(fire);
+  return new vscode.Disposable(() => {
+    clearTimeout(timer);
+    watcher.dispose();
+  });
+}
+
+/** The history view: serves the webview, answers its messages, and tells it to refresh when the repo changes. */
+export function historyView(webviewDir: vscode.Uri): vscode.WebviewViewProvider {
+  return {
+    resolveWebviewView(view) {
+      const { webview } = view;
+      webview.options = { enableScripts: true, localResourceRoots: [webviewDir] };
+      const script = webview.asWebviewUri(vscode.Uri.joinPath(webviewDir, 'main.js'));
+      webview.html = webviewHtml(webviewDir.fsPath, script.toString(), webview.cspSource);
+      webview.onDidReceiveMessage((msg) => handleMessage(msg, (reply) => webview.postMessage(reply)));
+      const folder = vscode.workspace.workspaceFolders?.[0];
+      if (folder) {
+        const watcher = watchRepo(folder.uri.fsPath, () => webview.postMessage({ type: 'refresh' }));
+        view.onDidDispose(() => watcher.dispose());
+      }
+    },
+  };
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   const webviewDir = vscode.Uri.joinPath(context.extensionUri, 'out', 'webview');
   context.subscriptions.push(
@@ -149,15 +185,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.registerTextDocumentContentProvider('stagehand', {
       provideTextDocumentContent: (uri) => (uri.query ? fileAtRevision(repoDir(), uri.query, uri.path.slice(1)) : ''),
     }),
-    vscode.window.registerWebviewViewProvider('stagehand.history', {
-      resolveWebviewView(view) {
-        const { webview } = view;
-        webview.options = { enableScripts: true, localResourceRoots: [webviewDir] };
-        const script = webview.asWebviewUri(vscode.Uri.joinPath(webviewDir, 'main.js'));
-        webview.html = webviewHtml(webviewDir.fsPath, script.toString(), webview.cspSource);
-        webview.onDidReceiveMessage((msg) => handleMessage(msg, (reply) => webview.postMessage(reply)));
-      },
-    }),
+    vscode.window.registerWebviewViewProvider('stagehand.history', historyView(webviewDir)),
     vscode.commands.registerCommand('stagehand.showCurrentBranch', async () => {
       const folder = vscode.workspace.workspaceFolders?.[0];
       if (!folder) {

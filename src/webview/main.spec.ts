@@ -436,3 +436,85 @@ test('a 50k-commit history renders only the visible rows and pages in more at th
   await scrollTo('bottom');
   expect(await loads()).toHaveLength(3);
 });
+
+test('a refresh keeps the selected commits that still exist and the pane on them; the button and the refresh message reload', async ({ page: p }) => {
+  await p.addInitScript(() => {
+    const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
+    w.posted = [];
+    w.acquireVsCodeApi = () => ({ postMessage: (m: unknown) => w.posted.push(m) });
+  });
+  await p.goto(page);
+  const postPage = (c: Commit[]) => p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, limit: 1000, commits: c }, '*'), c);
+  const posted = () => p.evaluate(() => (window as unknown as { posted: unknown[] }).posted);
+  const clearPosted = () => p.evaluate(() => { (window as unknown as { posted: unknown[] }).posted = []; });
+  await postPage(commits);
+  const rows = p.locator('.row');
+  await rows.nth(2).click();
+  const details = { ...commits[2]!, message: 'Commit number 2\n\nbody' };
+  await p.evaluate((d) => window.postMessage({ type: 'details', details: d }, '*'), details);
+  await p.evaluate((h) => window.postMessage({ type: 'changedFiles', hash: h, files: [{ status: 'M', path: 'a.txt', binary: false }] }, '*'), commits[2]!.hash);
+  await expect(p.locator('.details .full-message')).toHaveText('Commit number 2\n\nbody');
+
+  // The refresh button and the extension's refresh message both reload the first page.
+  await clearPosted();
+  await p.locator('button.refresh').click();
+  await p.evaluate(() => window.postMessage({ type: 'refresh' }, '*'));
+  await expect.poll(posted).toEqual([{ type: 'loadCommits', skip: 0, limit: 1000 }, { type: 'loadCommits', skip: 0, limit: 1000 }]);
+
+  // A new commit on top: the selected commit moved down one row and stays selected; the pane stays on it.
+  await clearPosted();
+  const newer = { ...commits[0]!, hash: `ff${commits[0]!.hash.slice(2)}`, subject: 'New commit' };
+  await postPage([newer, ...commits]);
+  await expect(p.locator('.row.selected')).toHaveCount(1);
+  await expect(p.locator('.row.selected .subject')).toHaveText('Commit number 2');
+  await expect(p.locator('.row[data-index="3"]')).toHaveClass(/selected/);
+  await expect(p.locator('.details .full-message')).toHaveText('Commit number 2\n\nbody');
+  await expect(p.locator('.details .file .path')).toHaveText(['a.txt']);
+  expect(await posted()).toEqual([]);
+  await p.screenshot({ path: 'test-results/screenshots/008-refresh-kept.png' });
+  // Down still moves from the selected row.
+  await p.locator('.commits').focus();
+  await p.keyboard.press('ArrowDown');
+  await expect(p.locator('.row.selected .subject')).toHaveText('Commit number 3');
+
+  // Multi-selection: one of two selected commits disappears, so the pane follows the one that's left.
+  await p.locator('.row[data-index="5"]').click({ modifiers: ['Control'] });
+  await expect(p.locator('.row.selected')).toHaveCount(2);
+  await clearPosted();
+  await postPage(commits.filter((_, i) => i !== 4)); // drops "Commit number 4" (row 5 above)
+  await expect(p.locator('.row.selected .subject')).toHaveText(['Commit number 3']);
+  expect(await posted()).toEqual([
+    { type: 'commitDetails', hash: commits[3]!.hash },
+    { type: 'changedFiles', hash: commits[3]!.hash },
+  ]);
+
+  // A page without the selected commit clears the selection and the pane.
+  await clearPosted();
+  await postPage(commits.filter((_, i) => i !== 3 && i !== 4));
+  await expect(p.locator('.row.selected')).toHaveCount(0);
+  await expect(p.locator('.details .info')).toBeEmpty();
+  await expect(p.locator('.details .files')).toBeEmpty();
+  expect(await posted()).toEqual([]);
+});
+
+test('a refresh after paging reloads every loaded commit in one request', async ({ page: p }) => {
+  await p.addInitScript(() => {
+    const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
+    w.posted = [];
+    w.acquireVsCodeApi = () => ({ postMessage: (m: unknown) => w.posted.push(m) });
+  });
+  await p.goto(page);
+  const many = Array.from({ length: 1500 }, (_, i) => ({ ...commits[0]!, hash: i.toString(16).padStart(40, '0'), subject: `C${i}` }));
+  await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, limit: 1000, commits: c }, '*'), many.slice(0, 1000));
+  await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 1000, limit: 1000, commits: c }, '*'), many.slice(1000));
+  await p.evaluate(() => { (window as unknown as { posted: unknown[] }).posted = []; });
+  await p.evaluate(() => window.postMessage({ type: 'refresh' }, '*'));
+  await expect.poll(() => p.evaluate(() => (window as unknown as { posted: unknown[] }).posted))
+    .toEqual([{ type: 'loadCommits', skip: 0, limit: 1500 }]);
+  // One commit was dropped meanwhile: 1499 < limit 1500 means that's the end, so scrolling to the bottom asks for nothing.
+  await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, limit: 1500, commits: c }, '*'), many.slice(1));
+  await expect(p.locator('.spacer')).toHaveAttribute('style', /height: 32978px/);
+  await p.locator('.commits').evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  await expect(p.locator('.row[data-index="1498"]')).toBeVisible();
+  expect(await p.evaluate(() => (window as unknown as { posted: unknown[] }).posted)).toEqual([{ type: 'loadCommits', skip: 0, limit: 1500 }]);
+});

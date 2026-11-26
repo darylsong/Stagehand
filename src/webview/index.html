@@ -7,7 +7,11 @@
     /* Fallbacks are for the standalone page (browser/Playwright); inside VS Code the theme variables win. */
     body { font-family: var(--vscode-font-family, system-ui, sans-serif); font-size: var(--vscode-font-size, 13px); color: var(--vscode-foreground, #333); background: var(--vscode-panel-background, #fff); margin: 0; padding: 0; }
     #app { display: flex; height: 100vh; }
-    .commits { flex: 1; min-width: 0; overflow: auto; outline: none; position: relative; }
+    .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .toolbar { flex: none; display: flex; justify-content: flex-end; padding: 2px 8px; border-bottom: 1px solid var(--vscode-panel-border, #ccc); }
+    .refresh { font: inherit; color: var(--vscode-foreground, #333); background: none; border: none; padding: 1px 6px; cursor: pointer; }
+    .refresh:hover { background: var(--vscode-toolbar-hoverBackground, #e0e0e0); }
+    .commits { flex: 1; min-height: 0; overflow: auto; outline: none; position: relative; }
     .spacer { width: 1px; }
     .rows { position: absolute; top: 0; left: 0; right: 0; }
     .details { width: 40%; overflow: auto; padding: 8px; border-left: 1px solid var(--vscode-panel-border, #ccc); }
