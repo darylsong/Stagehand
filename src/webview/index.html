@@ -24,6 +24,15 @@
     .label { flex: none; width: 60px; color: var(--vscode-descriptionForeground, #717171); }
     .hash-value, .parents-value { font-family: var(--vscode-editor-font-family, monospace); word-break: break-all; }
     .copy { font: inherit; color: var(--vscode-button-foreground, #fff); background: var(--vscode-button-background, #0060c0); border: none; padding: 1px 8px; cursor: pointer; }
+    .files { margin-top: 8px; border-top: 1px solid var(--vscode-panel-border, #ccc); padding-top: 4px; }
+    .file { display: flex; gap: 8px; line-height: 22px; white-space: nowrap; }
+    .status { flex: none; width: 1.5ch; font-weight: bold; font-family: var(--vscode-editor-font-family, monospace); }
+    .status-A { color: var(--vscode-gitDecoration-addedResourceForeground, #587c0c); }
+    .status-M { color: var(--vscode-gitDecoration-modifiedResourceForeground, #895503); }
+    .status-D { color: var(--vscode-gitDecoration-deletedResourceForeground, #ad0707); }
+    .status-R { color: var(--vscode-gitDecoration-renamedResourceForeground, #007100); }
+    .path { overflow: hidden; text-overflow: ellipsis; }
+    .binary { color: var(--vscode-descriptionForeground, #717171); font-style: italic; }
     .message { display: block; padding: 8px; color: var(--vscode-errorForeground, #a1260d); }
   </style>
 </head>

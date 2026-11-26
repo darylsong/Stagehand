@@ -1,8 +1,9 @@
-import type { Commit, CommitDetails } from '../core/git';
+import type { ChangedFile, Commit, CommitDetails } from '../core/git';
 
 export type Message =
   | { type: 'commits'; skip: number; commits: Commit[] }
   | { type: 'details'; details: CommitDetails }
+  | { type: 'changedFiles'; hash: string; files: ChangedFile[] }
   | { type: 'error'; message: string };
 
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
@@ -40,7 +41,9 @@ function select(list: HTMLElement, i: number): void {
   row.classList.add('selected');
   row.setAttribute('aria-selected', 'true');
   row.scrollIntoView({ block: 'nearest' });
-  post({ type: 'commitDetails', hash: commits[i]!.hash });
+  const hash = commits[i]!.hash;
+  post({ type: 'commitDetails', hash });
+  post({ type: 'changedFiles', hash });
 }
 
 function field(label: string, value: string): HTMLElement {
@@ -48,6 +51,16 @@ function field(label: string, value: string): HTMLElement {
   el.className = 'field';
   el.append(cell('label', label), cell(`value ${label.toLowerCase()}-value`, value));
   return el;
+}
+
+function renderFiles(el: HTMLElement, files: ChangedFile[]): void {
+  el.replaceChildren(...files.map((f) => {
+    const row = document.createElement('div');
+    row.className = 'file';
+    row.append(cell(`status status-${f.status}`, f.status), cell('path', f.oldPath ? `${f.oldPath} → ${f.path}` : f.path));
+    if (f.binary) row.append(cell('binary', 'Binary file changed'));
+    return row;
+  }));
 }
 
 function renderDetails(pane: HTMLElement, d: CommitDetails): void {
@@ -75,8 +88,13 @@ export function render(root: HTMLElement, msg: Message): void {
     root.replaceChildren(cell('message', msg.message));
     return;
   }
+  if (msg.type === 'changedFiles') {
+    const el = root.querySelector<HTMLElement>('.files');
+    if (el && msg.hash === commits[selected]?.hash) renderFiles(el, msg.files);
+    return;
+  }
   if (msg.type === 'details') {
-    const pane = root.querySelector<HTMLElement>('.details');
+    const pane = root.querySelector<HTMLElement>('.info');
     // Ignore late replies for a commit that is no longer selected.
     if (pane && msg.details.hash === commits[selected]?.hash) renderDetails(pane, msg.details);
     return;
@@ -108,6 +126,11 @@ export function render(root: HTMLElement, msg: Message): void {
   });
   const pane = document.createElement('div');
   pane.className = 'details';
+  const info = document.createElement('div');
+  info.className = 'info';
+  const files = document.createElement('div');
+  files.className = 'files';
+  pane.append(info, files);
   root.replaceChildren(list, pane);
 }
 

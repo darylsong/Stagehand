@@ -73,3 +73,45 @@ export async function commitDetails(cwd: string, hash: string): Promise<CommitDe
     message: rest.join('\0').replace(/\n+$/, ''),
   };
 }
+
+export interface ChangedFile {
+  /** A, M, D, R (rename score dropped), or another git status letter such as T. */
+  status: string;
+  path: string;
+  /** Set for renames: the path before. */
+  oldPath?: string;
+  /** numstat reported `-`: git sees binary content. */
+  binary: boolean;
+}
+
+/** Files a commit changed: against its first parent, or everything as added for a root commit. Renames detected. */
+export async function changedFiles(cwd: string, hash: string): Promise<ChangedFile[]> {
+  // Trust boundary: same check as commitDetails.
+  if (!/^[0-9a-f]{4,64}$/i.test(hash)) throw new Error(`Not a commit hash: ${hash}`);
+  const [parent] = (await git(cwd, ['show', '-s', '--format=%P', hash, '--'])).trim().split(' ').filter(Boolean);
+  const out = await git(cwd, [
+    'diff-tree', '-r', '-M', '-z', '--raw', '--numstat', '--no-commit-id',
+    ...(parent ? [parent, hash] : ['--root', hash]), '--',
+  ]);
+  return parseDiffTree(out);
+}
+
+/** Parses `git diff-tree -z --raw --numstat`: all raw records, then numstat records in the same order. */
+export function parseDiffTree(out: string): ChangedFile[] {
+  const f = out.split('\0');
+  const files: ChangedFile[] = [];
+  let i = 0;
+  while (f[i]?.startsWith(':')) {
+    const status = f[i]!.split(' ').at(-1)!.charAt(0);
+    if (status === 'R' || status === 'C') files.push({ status, oldPath: f[i + 1]!, path: f[i + 2]!, binary: false });
+    else files.push({ status, path: f[i + 1]!, binary: false });
+    i += status === 'R' || status === 'C' ? 3 : 2;
+  }
+  for (const file of files) {
+    const stat = f[i] ?? '';
+    // numstat: "added\tdeleted\tpath", or "added\tdeleted\t" followed by old and new paths for renames.
+    file.binary = stat.startsWith('-\t-\t');
+    i += stat.endsWith('\t') ? 3 : 1;
+  }
+  return files;
+}

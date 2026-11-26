@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import type { Commit, CommitDetails } from '../core/git';
+import type { ChangedFile, Commit, CommitDetails } from '../core/git';
 import { handleMessage, webviewHtml } from '../extension/extension';
 
 suite('stagehand.showCurrentBranch', () => {
@@ -31,6 +31,12 @@ suite('stagehand.history', () => {
     assert.strictEqual(details.message, 'init');
     assert.strictEqual(details.hash, init!.hash);
     assert.strictEqual(details.authorEmail, 't@t');
+  });
+
+  test('changedFiles returns an empty list for the empty init commit', async () => {
+    const [init] = await vscode.commands.executeCommand<Commit[]>('stagehand.history.loadCommits', { skip: 0, limit: 1 });
+    const files = await vscode.commands.executeCommand<ChangedFile[]>('stagehand.history.changedFiles', init!.hash);
+    assert.deepStrictEqual(files, []);
   });
 });
 
@@ -62,6 +68,25 @@ suite('webview message handling', () => {
     assert.strictEqual(reply.type, 'details');
     assert.strictEqual(reply.details.hash, init!.hash);
     assert.strictEqual(reply.details.message, 'init');
+  });
+
+  test('changedFiles replies with the hash and the files from the command', async () => {
+    const replies: unknown[] = [];
+    const calls: unknown[][] = [];
+    const files = [{ status: 'A', path: 'a.txt', binary: false }];
+    await handleMessage({ type: 'changedFiles', hash: 'abc123' }, (r) => replies.push(r), async (...args) => {
+      calls.push(args);
+      return files;
+    });
+    assert.deepStrictEqual(calls, [['stagehand.history.changedFiles', 'abc123']]);
+    assert.deepStrictEqual(replies, [{ type: 'changedFiles', hash: 'abc123', files }]);
+  });
+
+  test('changedFiles through the real command replies with an empty list for init', async () => {
+    const [init] = await vscode.commands.executeCommand<Commit[]>('stagehand.history.loadCommits', { skip: 0, limit: 1 });
+    const replies: unknown[] = [];
+    await handleMessage({ type: 'changedFiles', hash: init!.hash }, (r) => replies.push(r));
+    assert.deepStrictEqual(replies, [{ type: 'changedFiles', hash: init!.hash, files: [] }]);
   });
 
   test('copy writes the text to the clipboard', async () => {

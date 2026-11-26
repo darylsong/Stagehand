@@ -39,6 +39,10 @@
       {
         "command": "stagehand.history.commitDetails",
         "title": "Stagehand: Commit Details"
+      },
+      {
+        "command": "stagehand.history.changedFiles",
+        "title": "Stagehand: Changed Files"
       }
     ]
   },

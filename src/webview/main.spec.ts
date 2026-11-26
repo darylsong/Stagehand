@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
-import type { Commit } from '../core/git';
+import type { ChangedFile, Commit } from '../core/git';
 
 const page = pathToFileURL(resolve('out/webview/index.html')).href;
 
@@ -80,7 +80,9 @@ test('click selects a row, Down moves the selection, and the pane shows the post
   await expect(p.locator('.row.selected')).toHaveCount(1);
   expect(await posted()).toEqual([
     { type: 'commitDetails', hash: commits[0]!.hash },
+    { type: 'changedFiles', hash: commits[0]!.hash },
     { type: 'commitDetails', hash: commits[1]!.hash },
+    { type: 'changedFiles', hash: commits[1]!.hash },
   ]);
 
   // A late reply for the previously selected commit is ignored.
@@ -112,4 +114,36 @@ test('click selects a row, Down moves the selection, and the pane shows the post
   await p.keyboard.press('ArrowUp');
   await expect(rows.nth(20)).toHaveClass(/selected/);
   await p.screenshot({ path: 'test-results/screenshots/005-scrolled.png' });
+});
+
+test('the selected commit lists its changed files with status letters, rename arrow and binary flag', async ({ page: p }) => {
+  await p.setViewportSize({ width: 900, height: 300 });
+  await p.addInitScript(() => {
+    const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
+    w.posted = [];
+    w.acquireVsCodeApi = () => ({ postMessage: (m: unknown) => w.posted.push(m) });
+  });
+  await p.goto(page);
+  await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, commits: c }, '*'), commits);
+  await p.locator('.row').nth(2).click();
+  const posted = await p.evaluate(() => (window as unknown as { posted: unknown[] }).posted);
+  expect(posted).toContainEqual({ type: 'changedFiles', hash: commits[2]!.hash });
+
+  const files: ChangedFile[] = [
+    { status: 'A', path: 'src/added.ts', binary: false },
+    { status: 'M', path: 'README.md', binary: false },
+    { status: 'D', path: 'old/removed.txt', binary: false },
+    { status: 'R', oldPath: 'src/before.ts', path: 'src/after.ts', binary: false },
+    { status: 'A', path: 'assets/logo.png', binary: true },
+  ];
+  // A reply for another commit is ignored.
+  await p.evaluate((f) => window.postMessage({ type: 'changedFiles', hash: 'deadbeef', files: f }, '*'), files.slice(0, 1));
+  await p.evaluate(([h, f]) => window.postMessage({ type: 'changedFiles', hash: h, files: f }, '*'), [commits[2]!.hash, files] as const);
+  const rows = p.locator('.details .file');
+  await expect(rows).toHaveCount(5);
+  await expect(rows.locator('.status')).toHaveText(['A', 'M', 'D', 'R', 'A']);
+  await expect(rows.locator('.path')).toHaveText(['src/added.ts', 'README.md', 'old/removed.txt', 'src/before.ts → src/after.ts', 'assets/logo.png']);
+  await expect(rows.nth(4).locator('.binary')).toHaveText('Binary file changed');
+  await expect(p.locator('.details .binary')).toHaveCount(1);
+  await p.screenshot({ path: 'test-results/screenshots/006-files.png' });
 });

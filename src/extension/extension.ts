@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { commitDetails, currentBranch, listCommits } from '../core/git';
+import { changedFiles, commitDetails, currentBranch, listCommits } from '../core/git';
 
 function repoDir(): string {
   const folder = vscode.workspace.workspaceFolders?.[0];
@@ -28,6 +28,8 @@ export async function handleMessage(
       post({ type: 'commits', skip, commits });
     } else if (msg.type === 'commitDetails') {
       post({ type: 'details', details: await run('stagehand.history.commitDetails', msg.hash) });
+    } else if (msg.type === 'changedFiles') {
+      post({ type: 'changedFiles', hash: msg.hash, files: await run('stagehand.history.changedFiles', msg.hash) });
     } else if (msg.type === 'copy') {
       await vscode.env.clipboard.writeText(String(msg.text ?? ''));
     }
@@ -57,6 +59,7 @@ export function activate(context: vscode.ExtensionContext): void {
       listCommits(repoDir(), { skip, limit }),
     ),
     vscode.commands.registerCommand('stagehand.history.commitDetails', (hash: string) => commitDetails(repoDir(), hash)),
+    vscode.commands.registerCommand('stagehand.history.changedFiles', (hash: string) => changedFiles(repoDir(), hash)),
     vscode.window.registerWebviewViewProvider('stagehand.history', {
       resolveWebviewView(view) {
         const { webview } = view;
