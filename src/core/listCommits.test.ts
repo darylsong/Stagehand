@@ -26,8 +26,8 @@ it('lists commits from HEAD and other local branches, newest first, with parents
   expect(byHash[m]?.parents).toEqual([c, b]);
   expect(byHash[a]?.parents).toEqual([]);
   expect(byHash[b]).toMatchObject({ subject: 'B | with a pipe', authorName: 'Alice', authorEmail: 'test@example.com', parents: [a] });
-  expect(byHash[b]?.refs).toEqual(['feature']);
-  expect(byHash[m]?.refs).toEqual(['HEAD -> main']);
+  expect(byHash[b]?.refs).toEqual(['refs/heads/feature']);
+  expect(byHash[m]?.refs).toEqual(['HEAD -> refs/heads/main']);
   expect(byHash[a]?.authorDate).toMatch(/^2024-01-01T00:00:00/);
 
   expect((await listCommits(repo.dir, { skip: 1, limit: 2 })).map((x) => x.hash)).toEqual([m, c]);
@@ -45,12 +45,13 @@ it('gives branch, tag and detached-HEAD refs on the right commits', async () => 
   await repo.git('checkout', '-q', '--detach', a);
 
   const refs = Object.fromEntries((await listCommits(repo.dir)).map((x) => [x.hash, x.refs]));
-  expect(refs[a]).toEqual(['HEAD', 'tag: v1']); // bare `HEAD` = detached
-  expect(refs[b]).toEqual(['main']);
-  expect(refs[c]).toEqual(['feature']);
+  expect(refs[a]).toEqual(['HEAD', 'tag: refs/tags/v1']); // bare `HEAD` = detached
+  expect(refs[b]).toEqual(['refs/heads/main']);
+  expect(refs[c]).toEqual(['refs/heads/feature']);
 
   await repo.git('checkout', '-q', 'feature');
-  expect((await listCommits(repo.dir))[0]).toMatchObject({ hash: c, refs: ['HEAD -> feature'] });
+  await repo.git('update-ref', 'refs/remotes/origin/feature', c);
+  expect((await listCommits(repo.dir))[0]).toMatchObject({ hash: c, refs: ['HEAD -> refs/heads/feature', 'refs/remotes/origin/feature'] });
 });
 
 describe('error kinds', () => {

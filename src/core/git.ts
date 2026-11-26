@@ -30,7 +30,7 @@ export interface Commit {
   authorEmail: string;
   /** Strict ISO 8601. */
   authorDate: string;
-  /** Decorations as git prints them, e.g. `HEAD -> main`, `tag: v1`, `feature`. */
+  /** Decorations with full refnames, e.g. `HEAD -> refs/heads/main`, `HEAD` (detached), `tag: refs/tags/v1`, `refs/remotes/origin/main`. */
   refs: string[];
 }
 
@@ -72,7 +72,7 @@ async function classify(cwd: string, err: unknown): Promise<GitError> {
 export async function listCommits(cwd: string, { skip = 0, limit = 1000 } = {}): Promise<Commit[]> {
   try {
     const out = await git(cwd, [
-      'log', '-z', `--format=${LOG_FIELDS.join('%x00')}`, `--skip=${skip}`, `--max-count=${limit}`, 'HEAD', '--branches', '--',
+      'log', '-z', `--format=${LOG_FIELDS.join('%x00')}`, `--skip=${skip}`, `--max-count=${limit}`, '--decorate=full', 'HEAD', '--branches', '--',
     ]);
     return parseLog(out);
   } catch (err) {

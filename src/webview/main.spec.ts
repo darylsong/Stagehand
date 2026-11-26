@@ -23,7 +23,7 @@ test('renders a page of commits', async ({ page: p }) => {
   const first = rows.first();
   await expect(first.locator('.subject')).toHaveText('Fix parser | handle pipes');
   await expect(first.locator('.author')).toHaveText('Bob');
-  await expect(first.locator('.date')).toHaveText('3 hours ago');
+  await expect(first.locator('.date')).toHaveText(/^(Today|Yesterday) \d/); // 3 hours ago
   await expect(first.locator('.hash')).toHaveText('00abcdef');
   // Saved for the agent to Read and inspect visually.
   await p.screenshot({ path: 'test-results/screenshots/001-list.png' });
@@ -43,34 +43,100 @@ test('inside VS Code it asks for the first page once on load', async ({ page: p 
   await p.screenshot({ path: 'test-results/screenshots/013-list.png' });
 });
 
-test('rows show branch and tag labels, distinct, and mark the HEAD commit, attached or detached', async ({ page: p }) => {
-  const labelled = commits.slice(0, 4).map((c, i) => ({
-    ...c, refs: [['HEAD -> main', 'origin/main'], ['feature', 'tag: v1'], [], ['HEAD', 'tag: v0.9']][i]!,
+test('rows show branch and tag labels as icons + the first name, and mark the HEAD commit, attached or detached', async ({ page: p }) => {
+  const labelled = commits.slice(0, 5).map((c, i) => ({
+    ...c,
+    refs: [
+      ['HEAD -> refs/heads/main', 'refs/remotes/origin/main', 'refs/remotes/origin/HEAD'],
+      ['refs/heads/feature', 'tag: refs/tags/v1'], [], ['HEAD', 'tag: refs/tags/v0.9'], ['refs/remotes/origin/chore/x'],
+    ][i]!,
   }));
   await p.goto(page);
   await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, commits: c }, '*'), labelled);
   const rows = p.locator('.row');
-  await expect(rows.nth(0).locator('.ref')).toHaveText(['HEAD', 'main', 'origin/main']);
-  await expect(rows.nth(0).locator('.ref-head')).toHaveText('HEAD');
-  await expect(rows.nth(0).locator('.ref-branch')).toHaveText(['main', 'origin/main']);
-  await expect(rows.nth(1).locator('.ref-branch')).toHaveText('feature');
-  await expect(rows.nth(1).locator('.ref-tag')).toHaveText('v1');
-  await expect(rows.nth(1).locator('.ref-head')).toHaveCount(0);
+  const kinds = (i: number) => rows.nth(i).locator('.ref').evaluateAll((els) => els.map((e) => e.getAttribute('class')));
+  expect(await kinds(0)).toEqual(['ref ref-head', 'ref ref-local', 'ref ref-remote']); // origin/HEAD dropped
+  await expect(rows.nth(0).locator('.ref-name')).toHaveText('main');
+  await expect(rows.nth(0).locator('.refs')).toHaveAttribute('title', 'HEAD, main, origin/main');
+  expect(await kinds(1)).toEqual(['ref ref-local', 'ref ref-tag']);
+  await expect(rows.nth(1).locator('.ref-name')).toHaveText('feature');
   await expect(rows.nth(2).locator('.ref')).toHaveCount(0);
   // Detached: bare HEAD.
-  await expect(rows.nth(3).locator('.ref-head')).toHaveText('HEAD');
-  await expect(rows.nth(3).locator('.ref-tag')).toHaveText('v0.9');
+  expect(await kinds(3)).toEqual(['ref ref-head', 'ref ref-tag']);
+  await expect(rows.nth(3).locator('.ref-name')).toHaveText('v0.9');
+  await expect(rows.nth(4).locator('.ref-name')).toHaveText('origin/chore/x');
   await expect(p.locator('.row.head')).toHaveCount(2);
   await expect(rows.nth(0)).toHaveClass(/\bhead\b/);
   await expect(rows.nth(3)).toHaveClass(/\bhead\b/);
-  // Branches and tags look different.
+  // Each kind looks different.
   const look = (sel: string) => p.locator(sel).first().evaluate((e) => {
-    const s = getComputedStyle(e);
-    return [s.color, s.backgroundColor, s.borderTopStyle].join();
+    const s = getComputedStyle(e.firstElementChild!);
+    return [s.fill, s.stroke].join();
   });
-  const [branch, tag, head] = [await look('.ref-branch'), await look('.ref-tag'), await look('.ref-head')];
-  expect(new Set([branch, tag, head]).size).toBe(3);
+  const looks = await Promise.all(['.ref-head', '.ref-local', '.ref-remote', '.ref-tag'].map(look));
+  expect(new Set(looks).size).toBe(4);
   await p.screenshot({ path: 'test-results/screenshots/004-labels.png' });
+});
+
+test.describe('fixed clock, en-US, UTC', () => {
+  test.use({ locale: 'en-US', timezoneId: 'UTC' });
+
+  test('dates are Rider-style: Today/Yesterday + time, else short date + time; full timestamp in the tooltip', async ({ page: p }) => {
+    await p.clock.setFixedTime(new Date('2026-11-26T15:00:00Z'));
+    await p.goto(page);
+    const dated = ['2026-11-26T14:21:00Z', '2026-11-25T16:54:00Z', '2026-11-24T18:20:00Z', '2025-01-02T09:05:00Z']
+      .map((d, i) => ({ ...commits[i]!, authorDate: d }));
+    await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, commits: c }, '*'), dated);
+    const dates = p.locator('.date');
+    await expect(dates.nth(0)).toHaveText(/^Today 2:21\sPM$/);
+    await expect(dates.nth(1)).toHaveText(/^Yesterday 4:54\sPM$/);
+    await expect(dates.nth(2)).toHaveText(/^11\/24\/26, 6:20\sPM$/);
+    await expect(dates.nth(3)).toHaveText(/^1\/2\/25, 9:05\sAM$/);
+    await expect(dates.nth(0)).toHaveAttribute('title', /November 26, 2026/);
+  });
+});
+
+test('narrow widths: columns line up, labels never cover the subject, author hides then date', async ({ page: p }) => {
+  const mixed = commits.slice(0, 6).map((c, i) => ({
+    ...c,
+    subject: i % 2 ? 'A rather long subject line that will need to be truncated somewhere' : c.subject,
+    refs: i === 0 ? ['HEAD -> refs/heads/chore/sdk-airgile-bumps', 'refs/remotes/origin/chore/sdk-airgile-bumps']
+      : i === 2 ? ['refs/remotes/origin/feature/identity-platform-auth'] : [],
+    parents: i === 4 ? ['a', 'b'] : [],
+  }));
+  await p.goto(page);
+  await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, commits: c }, '*'), mixed);
+  const lefts = (sel: string) => p.locator(`.row ${sel}`).evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().left)));
+  const visible = (sel: string) => p.locator(`.row ${sel}`).first().isVisible();
+  for (const width of [1200, 800, 600, 420]) {
+    await p.setViewportSize({ width, height: 300 });
+    for (const sel of ['.author', '.date', '.hash']) {
+      if (!(await visible(sel))) continue;
+      expect(new Set(await lefts(sel)).size, `${sel} at ${width}px`).toBe(1);
+    }
+    // The subject keeps real space and the labels sit after it, not on top.
+    const boxes = await p.locator('.row').evaluateAll((rows) => rows.map((r) => {
+      const subject = r.querySelector('.subject')!.getBoundingClientRect();
+      const refs = r.querySelector('.refs')!.getBoundingClientRect();
+      const hash = r.querySelector('.hash')!.getBoundingClientRect();
+      return { subject: subject.width, overlap: subject.right > refs.left + 0.5, hashRight: hash.right, rowRight: r.getBoundingClientRect().right };
+    }));
+    for (const b of boxes) {
+      expect(b.subject).toBeGreaterThan(40);
+      expect(b.overlap).toBe(false);
+      expect(b.rowRight - b.hashRight).toBeGreaterThanOrEqual(12); // clear of an overlay scrollbar
+    }
+    await p.screenshot({ path: `test-results/screenshots/014-width-${width}.png` });
+  }
+  // The list is 60% of the page (the pane takes 40%).
+  for (const [width, author, date] of [[1200, true, true], [900, false, true], [700, false, false]] as const) {
+    await p.setViewportSize({ width, height: 300 });
+    const listWidth = await p.locator('.commits').evaluate((e) => e.clientWidth);
+    expect([await visible('.author'), await visible('.date')], `list ${listWidth}px`).toEqual([author, date]);
+  }
+  // Merge commits are dimmed.
+  const color = (i: number) => p.locator('.row .subject').nth(i).evaluate((e) => getComputedStyle(e).color);
+  expect(await color(4)).not.toBe(await color(2));
 });
 
 test('the hash column has a fixed width and the standalone page has neutral colours', async ({ page: p }) => {

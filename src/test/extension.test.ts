@@ -124,7 +124,7 @@ suite('webview message handling', () => {
     assert.strictEqual(reply.limit, 1000); // the webview tells "end of history" from a reply shorter than its limit
     assert.deepStrictEqual(reply.commits.map((c) => c.subject), ['modify', 'init']);
     // Labels and the HEAD marker reach the webview as refs.
-    assert.deepStrictEqual(reply.commits.map((c) => c.refs), [['HEAD -> integration-branch'], []]);
+    assert.deepStrictEqual(reply.commits.map((c) => c.refs), [['HEAD -> refs/heads/integration-branch'], []]);
   });
 
   test('loadCommits with skip/limit replies with that page of the real log', async () => {
@@ -368,9 +368,9 @@ suite('checkout', () => {
     assert.deepStrictEqual(replies.map((r) => r.type), ['commits']);
     // Both commits share a timestamp, so match by hash rather than list order.
     const refs = (r: { commits?: Commit[] }) => Object.fromEntries(r.commits!.map((c) => [c.hash, c.refs]));
-    assert.deepStrictEqual(refs(replies[0]!), { [init.hash]: ['HEAD'], [modify.hash]: ['integration-branch'] });
+    assert.deepStrictEqual(refs(replies[0]!), { [init.hash]: ['HEAD'], [modify.hash]: ['refs/heads/integration-branch'] });
     await handleMessage({ type: 'checkout', hash: modify.hash }, (r) => replies.push(r as { type: string }));
-    assert.deepStrictEqual(refs(replies[1]!), { [init.hash]: [], [modify.hash]: ['HEAD -> integration-branch'] });
+    assert.deepStrictEqual(refs(replies[1]!), { [init.hash]: [], [modify.hash]: ['HEAD -> refs/heads/integration-branch'] });
   });
 
   test('a refused checkout message posts nothing', async () => {

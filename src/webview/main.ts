@@ -12,15 +12,18 @@ declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
 const vscode = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : undefined;
 const post = (msg: unknown) => vscode?.postMessage(msg);
 
-const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
-const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
-  ['year', 31536000], ['month', 2592000], ['week', 604800], ['day', 86400], ['hour', 3600], ['minute', 60],
-];
+const DAY = 86400000;
+const dayNumber = (d: Date) => Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / DAY; // local calendar day
 
-export function relativeDate(iso: string, now = Date.now()): string {
-  const secs = (new Date(iso).getTime() - now) / 1000;
-  for (const [unit, size] of UNITS) if (Math.abs(secs) >= size) return rtf.format(Math.round(secs / size), unit);
-  return rtf.format(0, 'second');
+/** Rider-style absolute date: "Today 2:21 PM", "Yesterday 4:54 PM", else the locale's short date and time. */
+export function formatDate(iso: string, now = new Date()): string {
+  const d = new Date(iso);
+  const days = dayNumber(now) - dayNumber(d);
+  if (days === 0 || days === 1) {
+    const word = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(-days, 'day');
+    return `${word[0]!.toLocaleUpperCase()}${word.slice(1)} ${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
+  }
+  return d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
 }
 
 function cell(cls: string, text: string): HTMLElement {
@@ -30,15 +33,41 @@ function cell(cls: string, text: string): HTMLElement {
   return el;
 }
 
-/** Labels from git's decorations: `HEAD -> main` / bare `HEAD` (detached) mark HEAD, `tag: v1` is a tag, the rest are branches. */
+type RefKind = 'head' | 'local' | 'remote' | 'tag';
+
+/** git's full-name decorations → kinds + short names. `HEAD -> refs/heads/x` gives HEAD and x; remotes' `HEAD` pointers are dropped. */
+export function parseRefs(refs: string[]): { kind: RefKind; name: string }[] {
+  return refs.flatMap((r): { kind: RefKind; name: string }[] => {
+    if (r === 'HEAD') return [{ kind: 'head', name: 'HEAD' }];
+    if (r.startsWith('HEAD -> ')) return [{ kind: 'head', name: 'HEAD' }, ...parseRefs([r.slice('HEAD -> '.length)])];
+    if (r.startsWith('tag: ')) return [{ kind: 'tag', name: r.slice('tag: '.length).replace(/^refs\/tags\//, '') }];
+    if (r.startsWith('refs/remotes/')) return r.endsWith('/HEAD') ? [] : [{ kind: 'remote', name: r.slice('refs/remotes/'.length) }];
+    return [{ kind: 'local', name: r.replace(/^refs\/heads\//, '') }];
+  });
+}
+
+const SVG = 'http://www.w3.org/2000/svg';
+function refIcon(kind: RefKind): Element {
+  const svg = document.createElementNS(SVG, 'svg');
+  svg.setAttribute('class', `ref ref-${kind}`);
+  svg.setAttribute('viewBox', '0 0 12 12');
+  const shape = document.createElementNS(SVG, kind === 'head' ? 'circle' : 'path');
+  if (kind === 'head') for (const [k, v] of [['cx', '6'], ['cy', '6'], ['r', '4']]) shape.setAttribute(k!, v!);
+  else shape.setAttribute('d', 'M1.5 2.5h5.5l3.5 3.5-3.5 3.5h-5.5z'); // a luggage-tag shape
+  svg.append(shape);
+  return svg;
+}
+
+/** Labels: one icon per ref, then the first non-HEAD name (truncated from the left); every name in the tooltip. */
 function labels(refs: string[]): HTMLElement {
+  const parsed = parseRefs(refs);
   const el = cell('refs', '');
-  el.append(...refs.flatMap((r) => {
-    if (r === 'HEAD') return [cell('ref ref-head', 'HEAD')];
-    if (r.startsWith('HEAD -> ')) return [cell('ref ref-head', 'HEAD'), cell('ref ref-branch', r.slice('HEAD -> '.length))];
-    if (r.startsWith('tag: ')) return [cell('ref ref-tag', r.slice('tag: '.length))];
-    return [cell('ref ref-branch', r)];
-  }));
+  if (!parsed.length) return el;
+  el.title = parsed.map((r) => r.name).join(', ');
+  const name = cell('ref-name', '');
+  name.append(cell('', (parsed.find((r) => r.kind !== 'head') ?? parsed[0]!).name)); // inner span: plain LTR text inside the RTL box
+  el.append(cell('ref-icons', ''), name);
+  el.firstElementChild!.append(...parsed.map((r) => refIcon(r.kind)));
   return el;
 }
 
@@ -77,16 +106,17 @@ function renderRows(list: HTMLElement): void {
     const c = commits[i]!;
     const row = document.createElement('div');
     const isHead = c.refs.some((r) => r === 'HEAD' || r.startsWith('HEAD -> '));
-    row.className = `row${selected.has(i) ? ' selected' : ''}${isHead ? ' head' : ''}`;
+    row.className = `row${selected.has(i) ? ' selected' : ''}${isHead ? ' head' : ''}${c.parents.length > 1 ? ' merge' : ''}`;
     row.dataset.index = String(i);
     row.style.top = `${i * ROW_HEIGHT}px`;
     row.title = c.hash;
     row.setAttribute('role', 'option');
     row.setAttribute('aria-selected', String(selected.has(i)));
-    row.append(
-      cell('subject', c.subject), labels(c.refs), cell('author', c.authorName),
-      cell('date', relativeDate(c.authorDate)), cell('hash', c.hash.slice(0, 8)),
-    );
+    const title = cell('title', '');
+    title.append(cell('subject', c.subject), labels(c.refs));
+    const date = cell('date', formatDate(c.authorDate));
+    date.title = new Date(c.authorDate).toLocaleString(undefined, { dateStyle: 'full', timeStyle: 'long' });
+    row.append(title, cell('author', c.authorName), date, cell('hash', c.hash.slice(0, 8)));
     els.push(row);
   }
   rows.replaceChildren(...els);

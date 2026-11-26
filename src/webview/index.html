@@ -15,21 +15,34 @@
     .spacer { width: 1px; }
     .rows { position: absolute; top: 0; left: 0; right: 0; }
     .details { width: 40%; overflow: auto; padding: 8px; border-left: 1px solid var(--vscode-panel-border, #ccc); }
-    .row { position: absolute; left: 0; right: 0; box-sizing: border-box; height: 22px; display: flex; gap: 12px; padding: 0 8px; line-height: 22px; white-space: nowrap; } /* height = ROW_HEIGHT in main.ts */
+    .commits { container-type: inline-size; }
+    /* height = ROW_HEIGHT in main.ts; right padding keeps the hash clear of an overlay scrollbar. */
+    .row { position: absolute; left: 0; right: 0; box-sizing: border-box; height: 22px; display: flex; gap: 12px; padding: 0 16px 0 8px; line-height: 22px; white-space: nowrap; }
     .row:hover { background: var(--vscode-list-hoverBackground, #f0f0f0); }
     .row.selected { background: var(--vscode-list-inactiveSelectionBackground, #e4e6f1); }
     .commits:focus .row.selected { background: var(--vscode-list-activeSelectionBackground, #0060c0); color: var(--vscode-list-activeSelectionForeground, #fff); }
-    .commits:focus .row.selected > * { color: inherit; }
-    .subject { flex: 1; overflow: hidden; text-overflow: ellipsis; }
-    .author, .date, .hash { color: var(--vscode-descriptionForeground, #717171); }
-    .author { width: 140px; overflow: hidden; text-overflow: ellipsis; }
-    .date { width: 110px; }
-    .hash { flex: none; width: 8ch; font-family: var(--vscode-editor-font-family, monospace); }
-    .refs { flex: none; display: flex; gap: 4px; align-items: center; }
-    .ref { line-height: 16px; padding: 0 6px; border-radius: 8px; font-size: 0.9em; }
-    .ref-branch { color: var(--vscode-badge-foreground, #fff); background: var(--vscode-badge-background, #4d4d4d); }
-    .ref-tag { color: var(--vscode-gitDecoration-addedResourceForeground, #587c0c); border: 1px solid currentColor; line-height: 14px; }
-    .ref-head { color: var(--vscode-button-foreground, #fff); background: var(--vscode-gitDecoration-modifiedResourceForeground, #895503); font-weight: bold; }
+    .commits:focus .row.selected :is(.subject, .ref-name, .author, .date, .hash) { color: inherit; }
+    /* The subject column: subject text, then labels at its right end. The subject shrinks to half first; then the label name shrinks (icons stay). */
+    .title { flex: 1; min-width: 0; display: flex; gap: 8px; }
+    .subject { flex: 1 1 auto; min-width: calc(50% - 8px); overflow: hidden; text-overflow: ellipsis; }
+    .author, .date, .hash { flex: none; overflow: hidden; text-overflow: ellipsis; color: var(--vscode-descriptionForeground, #717171); }
+    .author { width: 140px; }
+    .date { width: 140px; }
+    .hash { width: 8ch; font-family: var(--vscode-editor-font-family, monospace); }
+    @container (max-width: 620px) { .author { display: none; } }
+    @container (max-width: 460px) { .date { display: none; } }
+    .row.merge .subject { color: var(--vscode-descriptionForeground, #717171); }
+    .refs { flex: 0 0 auto; max-width: 50%; min-width: 0; display: flex; gap: 4px; align-items: center; }
+    .ref-icons { flex: none; display: flex; }
+    .ref-icons > .ref + .ref { margin-left: -6px; } /* stacked, like Rider */
+    .ref { width: 14px; height: 14px; }
+    .ref path, .ref circle { stroke: var(--vscode-panel-background, #fff); stroke-width: 1; }
+    .ref-head { fill: var(--vscode-charts-orange, #d18616); }
+    .ref-local { fill: var(--vscode-charts-green, #388a34); }
+    .ref-remote { fill: var(--vscode-charts-purple, #652d90); }
+    .ref-tag path { fill: none; stroke: var(--vscode-charts-yellow, #bf8803); stroke-width: 1.5; }
+    .ref-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; direction: rtl; color: var(--vscode-descriptionForeground, #717171); }
+    .ref-name > span { direction: ltr; unicode-bidi: isolate; }
     .row.head .subject { font-weight: bold; }
     .full-message { margin: 0 0 8px; white-space: pre-wrap; font-family: inherit; }
     .field { display: flex; gap: 8px; align-items: baseline; line-height: 22px; }
