@@ -61,6 +61,10 @@
         "title": "Stagehand: Copy Revision Number"
       },
       {
+        "command": "stagehand.compareWithLocal",
+        "title": "Stagehand: Compare with Local"
+      },
+      {
         "command": "stagehand.revert",
         "title": "Stagehand: Revert Commits"
       },

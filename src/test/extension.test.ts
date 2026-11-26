@@ -285,6 +285,80 @@ suite('webview message handling', () => {
     assert.strictEqual(await vscode.env.clipboard.readText(), `${'c'.repeat(40)} ${'d'.repeat(40)}`);
   });
 
+  test('stagehand.compareWithLocal opens a multi-diff tab: commit (stagehand:) against disk (file:), untracked included', async () => {
+    const init = await commitNamed('init');
+    const untracked = join(repoDir(), 'compare-untracked.txt');
+    writeFileSync(untracked, 'u\n');
+    try {
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+      await vscode.commands.executeCommand('stagehand.compareWithLocal', init.hash);
+      const text = async (uri: vscode.Uri) => (await vscode.workspace.openTextDocument(uri)).getText();
+      const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
+      // VS Code appends the file count to the title we pass.
+      assert.match(tab?.label ?? '', new RegExp(`^${init.hash.slice(0, 8)} ↔ Local( \\(\\d+ files?\\))?$`));
+      // TabInputTextMultiDiff is newer than our @types/vscode; read its textDiffs structurally.
+      const diffs = (tab?.input as { textDiffs?: { original: vscode.Uri; modified: vscode.Uri }[] }).textDiffs;
+      assert.ok(diffs, 'active tab is a multi-diff editor');
+      const byPath = new Map(diffs.map((d) => [d.modified.path, d]));
+      const file = byPath.get(vscode.Uri.file(join(repoDir(), 'file.txt')).path)!;
+      assert.strictEqual(file.original.scheme, 'stagehand');
+      assert.strictEqual(file.modified.scheme, 'file');
+      assert.strictEqual(await text(file.original), 'old\n');
+      const added = byPath.get(vscode.Uri.file(untracked).path)!;
+      assert.strictEqual(await text(added.original), '');
+      assert.strictEqual(diffs.length, 2);
+    } finally {
+      rmSync(untracked);
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    }
+  });
+
+  const compareDiffs = async (hash: string) => {
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    await vscode.commands.executeCommand('stagehand.compareWithLocal', hash);
+    const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input as { textDiffs?: { original: vscode.Uri; modified: vscode.Uri }[] };
+    assert.ok(input?.textDiffs, 'active tab is a multi-diff editor');
+    return input.textDiffs;
+  };
+
+  test('compareWithLocal leaves binary files out of the multi-diff', async () => {
+    const init = await commitNamed('init');
+    const binary = join(repoDir(), 'compare-binary.bin');
+    writeFileSync(binary, Buffer.from([0x89, 0x50, 0x00, 0x01, 0x02]));
+    try {
+      const diffs = await compareDiffs(init.hash);
+      assert.deepStrictEqual(diffs.map((d) => d.modified.path), [vscode.Uri.file(join(repoDir(), 'file.txt')).path]);
+    } finally {
+      rmSync(binary);
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    }
+  });
+
+  test('compareWithLocal shows a renamed file against its old path at the commit', async () => {
+    const modify = await commitNamed('modify');
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: repoDir() });
+    git('mv', 'file.txt', 'compare-renamed.txt');
+    try {
+      const diffs = await compareDiffs(modify.hash);
+      assert.strictEqual(diffs.length, 1);
+      const [d] = diffs as [{ original: vscode.Uri; modified: vscode.Uri }];
+      assert.strictEqual(d.modified.path, vscode.Uri.file(join(repoDir(), 'compare-renamed.txt')).path);
+      assert.strictEqual(d.original.scheme, 'stagehand');
+      assert.strictEqual((await vscode.workspace.openTextDocument(d.original)).getText(), 'new\n');
+    } finally {
+      git('mv', 'compare-renamed.txt', 'file.txt');
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    }
+  });
+
+  test('a compareWithLocal message runs stagehand.compareWithLocal with the hash', async () => {
+    const init = await commitNamed('init');
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    await handleMessage({ type: 'compareWithLocal', hash: init.hash }, () => assert.fail('no reply'));
+    assert.match(vscode.window.tabGroups.activeTabGroup.activeTab?.label ?? '', new RegExp(`^${init.hash.slice(0, 8)} ↔ Local`));
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+  });
+
   test('copy writes the text to the clipboard', async () => {
     await vscode.env.clipboard.writeText('');
     await handleMessage({ type: 'copy', text: 'abc123' }, () => assert.fail('copy posts no reply'));

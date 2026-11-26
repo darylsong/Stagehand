@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import {
-  branchesContaining, changedFiles, checkout as gitCheckout, checkoutTarget, smartCheckout, STASH_KEPT, type CheckoutRefused, combinedChanges, commitDetails, currentBranch, fileAtRevision, firstParent, gitError, listCommits, revert, revertAbort, revertContinue, revertState, type ChangedFile, type ErrorKind,
+  branchesContaining, changedFiles, checkout as gitCheckout, checkoutTarget, smartCheckout, STASH_KEPT, type CheckoutRefused, combinedChanges, commitDetails, currentBranch, fileAtRevision, firstParent, gitError, listCommits, localChanges, revert, revertAbort, revertContinue, revertState, type ChangedFile, type ErrorKind,
 } from '../core/git';
 
 /** The first workspace folder's path; throws the 'no-folder' GitError when there is none. */
@@ -36,6 +36,21 @@ export async function openDiff(hash: string, file: ChangedFile, preview = true):
   const left = revUri(parent, file.oldPath ?? file.path);
   const right = revUri(hash, file.path);
   await vscode.commands.executeCommand('vscode.diff', left, right, `${basename(file.path)} (${hash.slice(0, 8)})`, { preview });
+}
+
+/**
+ * Opens the multi-file diff `<short hash> ↔ Local`: each file at the commit (left) against the file on disk (right).
+ * Added/deleted files get an empty side; binary files are left out (they'd open nothing).
+ */
+export async function compareWithLocal(hash: string): Promise<void> {
+  const dir = repoDir();
+  const files = (await localChanges(dir, hash)).filter((f) => !f.binary);
+  const empty = (path: string) => revUri(undefined, path);
+  const resources = files.map((f) => {
+    const right = f.status === 'D' ? empty(f.path) : vscode.Uri.file(join(dir, f.path));
+    return [right, f.status === 'A' ? empty(f.path) : revUri(hash, f.oldPath ?? f.path), right];
+  });
+  await vscode.commands.executeCommand('vscode.changes', `${hash.slice(0, 8)} ↔ Local`, resources);
 }
 
 /** UI the checkout command uses; injectable so integration tests can answer the quick pick and the modal, and see messages. */
@@ -125,6 +140,8 @@ export async function handleMessage(
         return;
       }
       post({ type: 'refresh' }); // the webview reloads (keeping its selection); the reply carries the banner state
+    } else if (msg.type === 'compareWithLocal') {
+      await run('stagehand.compareWithLocal', msg.hash);
     } else if (msg.type === 'copyRevision') {
       await run('stagehand.copyRevision', msg.hash);
     } else if (msg.type === 'copy') {
@@ -202,6 +219,7 @@ export function activate(context: vscode.ExtensionContext): void {
       await vscode.env.clipboard.writeText(hashes.join(' '));
       vscode.window.setStatusBarMessage('Copied', 2000);
     }),
+    vscode.commands.registerCommand('stagehand.compareWithLocal', compareWithLocal),
     vscode.commands.registerCommand('stagehand.revert', (hashes: string[]) => revert(repoDir(), hashes)),
     vscode.commands.registerCommand('stagehand.revertContinue', () => revertContinue(repoDir())),
     vscode.commands.registerCommand('stagehand.revertAbort', () => revertAbort(repoDir())),

@@ -201,7 +201,7 @@ function showSelection(): void {
   if (hashes.length) post({ type: 'changedFiles', hash: hashes });
 }
 
-/** The row context menu, in Rider's order: Copy │ Checkout (one commit only) │ Revert (no merges). Inapplicable items are disabled. */
+/** The row context menu, in Rider's order: Copy │ Checkout, Compare with Local (one commit only) │ Revert (no merges). Inapplicable items are disabled. */
 function showMenu(x: number, y: number): void {
   hideMenu();
   const picked = [...selected].sort((a, b) => a - b).map((i) => commits[i]!);
@@ -226,7 +226,8 @@ function showMenu(x: number, y: number): void {
   };
   const separator = () => Object.assign(document.createElement('div'), { className: 'menu-separator', role: 'separator' });
   menu.append(item('Copy Revision Number', copyMessage()), separator(),
-    item('Checkout', { type: 'checkout', hash: picked[0]!.hash }, picked.length !== 1), separator());
+    item('Checkout', { type: 'checkout', hash: picked[0]!.hash }, picked.length !== 1),
+    item('Compare with Local', { type: 'compareWithLocal', hash: picked[0]!.hash }, picked.length !== 1), separator());
   menu.append(item(picked.length === 1 ? 'Revert Commit' : `Revert ${picked.length} Commits`,
     { type: 'revert', hash: picked.map((c) => c.hash) }, picked.some((c) => c.parents.length > 1)));
   document.body.append(menu);

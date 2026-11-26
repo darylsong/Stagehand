@@ -499,7 +499,7 @@ test('right-click on a row offers Checkout, which posts checkout(hash); double-c
   // Right-click an unselected row: it becomes the single selection and the menu offers Checkout.
   await rows.nth(2).click({ button: 'right' });
   await expect(rows.nth(2)).toHaveClass(/selected/);
-  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Checkout', 'Revert Commit']);
+  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Checkout', 'Compare with Local', 'Revert Commit']);
   await p.screenshot({ path: 'test-results/screenshots/011-context-menu.png' });
   await menu.getByText('Checkout').click();
   await expect(menu).toHaveCount(0);
@@ -518,7 +518,7 @@ test('right-click on a row offers Checkout, which posts checkout(hash); double-c
   await rows.nth(6).click({ modifiers: ['Shift'] });
   await rows.nth(5).click({ button: 'right' });
   await expect(p.locator('.row.selected')).toHaveCount(2);
-  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Checkout', 'Revert 2 Commits']);
+  await expect(menu.locator('.menu-item')).toHaveText(['Copy Revision Number', 'Checkout', 'Compare with Local', 'Revert 2 Commits']);
   await expect(menu.getByText('Checkout')).toBeDisabled();
   await menu.getByText('Checkout').dispatchEvent('click');
   expect(await checkouts()).toHaveLength(1);
@@ -947,7 +947,7 @@ test('019: menu in Rider order with separators; Copy Revision Number and Cmd/Ctr
   await rows.nth(1).click({ modifiers: ['ControlOrMeta'] });
   await rows.nth(1).click({ button: 'right' });
   const kinds = await menu.locator('> *').evaluateAll((els) => els.map((el) => el.className === 'menu-separator' ? '|' : el.textContent));
-  expect(kinds).toEqual(['Copy Revision Number', '|', 'Checkout', '|', 'Revert 2 Commits']);
+  expect(kinds).toEqual(['Copy Revision Number', '|', 'Checkout', 'Compare with Local', '|', 'Revert 2 Commits']);
   await expect(menu.getByText('Checkout')).toBeDisabled();
   await expect(menu.getByText('Copy Revision Number')).toBeEnabled();
   await p.screenshot({ path: 'test-results/screenshots/019-menu.png' });
@@ -960,4 +960,31 @@ test('019: menu in Rider order with separators; Copy Revision Number and Cmd/Ctr
   await p.locator('.commits').focus();
   await p.keyboard.press('ControlOrMeta+c');
   expect(await copies()).toEqual([expected, expected]);
+});
+
+test('020: Compare with Local is enabled for one commit and posts its hash; disabled for two', async ({ page: p }) => {
+  await p.addInitScript(() => {
+    const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
+    w.posted = [];
+    w.acquireVsCodeApi = () => ({ postMessage: (m: unknown) => w.posted.push(m) });
+  });
+  await p.goto(page);
+  await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, commits: c }, '*'), commits);
+  const compares = async () => (await p.evaluate(() => (window as unknown as { posted: { type: string }[] }).posted)).filter((m) => m.type === 'compareWithLocal');
+  const rows = p.locator('.row');
+  const item = p.locator('.menu').getByText('Compare with Local');
+
+  await rows.nth(2).click({ button: 'right' });
+  await expect(item).toBeEnabled();
+  await p.screenshot({ path: 'test-results/screenshots/020-menu.png' });
+  await item.click();
+  await expect(p.locator('.menu')).toHaveCount(0);
+  expect(await compares()).toEqual([{ type: 'compareWithLocal', hash: commits[2]!.hash }]);
+
+  await rows.nth(3).click({ modifiers: ['Shift'] });
+  await rows.nth(3).click({ button: 'right' });
+  await expect(p.locator('.row.selected')).toHaveCount(2);
+  await expect(item).toBeDisabled();
+  await item.dispatchEvent('click');
+  expect(await compares()).toHaveLength(1);
 });

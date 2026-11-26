@@ -225,6 +225,21 @@ export async function combinedChanges(cwd: string, hashes: string[]): Promise<Co
   return { files, gap };
 }
 
+/**
+ * Files differing between a commit and the working tree as it is on disk: tracked changes (staged or not, renames
+ * detected) plus untracked files that aren't ignored, the latter as added. Sorted by path.
+ */
+export async function localChanges(cwd: string, hash: string): Promise<ChangedFile[]> {
+  hex(hash);
+  const tracked = parseDiffTree(await git(cwd, ['diff', '--no-color', '--no-ext-diff', '-M', '-z', '--raw', '--numstat', hash, '--']));
+  const untracked = (await git(cwd, ['ls-files', '-z', '--others', '--exclude-standard', '--'])).split('\0').filter(Boolean);
+  const added = await Promise.all(untracked.map(async (path) => ({
+    // ponytail: git's binary heuristic (a NUL in the first 8000 bytes), ignoring gitattributes; unreadable = text.
+    status: 'A', path, binary: (await readFile(join(cwd, path)).catch(() => Buffer.alloc(0))).subarray(0, 8000).includes(0),
+  })));
+  return [...tracked, ...added].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+
 /** First parent of a commit, or undefined for a root commit. `hash` must be a hex object name. */
 export async function firstParent(cwd: string, hash: string): Promise<string | undefined> {
   // Trust boundary: hashes come from the webview; refuse anything git could read as an option or rev expression.
