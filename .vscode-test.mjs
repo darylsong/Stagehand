@@ -1,6 +1,6 @@
 import { defineConfig } from '@vscode/test-cli';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,7 +8,13 @@ import { join } from 'node:path';
 const repo = mkdtempSync(join(tmpdir(), 'stagehand-it-'));
 const git = (...args) => execFileSync('git', args, { cwd: repo });
 git('init', '-q', '-b', 'integration-branch');
-git('-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', 'commit', '-q', '--allow-empty', '-m', 'init');
+const commit = (msg, ...args) => git('-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', 'commit', '-q', ...args, '-m', msg);
+// init adds file.txt; modify changes it (for the diff tests).
+writeFileSync(join(repo, 'file.txt'), 'old\n');
+git('add', 'file.txt');
+commit('init');
+writeFileSync(join(repo, 'file.txt'), 'new\n');
+commit('modify', '-a');
 
 export default defineConfig({
   files: 'out/test/**/*.test.js',

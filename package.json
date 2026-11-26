@@ -43,6 +43,10 @@
       {
         "command": "stagehand.history.changedFiles",
         "title": "Stagehand: Changed Files"
+      },
+      {
+        "command": "stagehand.history.openDiff",
+        "title": "Stagehand: Open Diff"
       }
     ]
   },

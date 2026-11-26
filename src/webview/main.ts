@@ -53,12 +53,22 @@ function field(label: string, value: string): HTMLElement {
   return el;
 }
 
-function renderFiles(el: HTMLElement, files: ChangedFile[]): void {
+function renderFiles(el: HTMLElement, hash: string, files: ChangedFile[]): void {
   el.replaceChildren(...files.map((f) => {
     const row = document.createElement('div');
     row.className = 'file';
+    row.tabIndex = 0;
     row.append(cell(`status status-${f.status}`, f.status), cell('path', f.oldPath ? `${f.oldPath} → ${f.path}` : f.path));
-    if (f.binary) row.append(cell('binary', 'Binary file changed'));
+    if (f.binary) {
+      row.append(cell('binary', 'Binary file changed'));
+      return row;
+    }
+    const open = (preview: boolean) => post({ type: 'openDiff', hash, file: f, preview });
+    row.addEventListener('click', () => open(true));
+    row.addEventListener('dblclick', () => open(false));
+    row.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') open(true);
+    });
     return row;
   }));
 }
@@ -90,7 +100,7 @@ export function render(root: HTMLElement, msg: Message): void {
   }
   if (msg.type === 'changedFiles') {
     const el = root.querySelector<HTMLElement>('.files');
-    if (el && msg.hash === commits[selected]?.hash) renderFiles(el, msg.files);
+    if (el && msg.hash === commits[selected]?.hash) renderFiles(el, msg.hash, msg.files);
     return;
   }
   if (msg.type === 'details') {

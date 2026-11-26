@@ -4,7 +4,10 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 
 export async function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
-  const { stdout } = await execFileAsync('git', args, { cwd, env: env && { ...process.env, ...env } });
+  const { stdout } = await execFileAsync('git', args, {
+    cwd, env: env && { ...process.env, ...env },
+    maxBuffer: 256 * 1024 * 1024, // ponytail: whole file in memory; stream if huge files matter
+  });
   return stdout;
 }
 
@@ -86,9 +89,8 @@ export interface ChangedFile {
 
 /** Files a commit changed: against its first parent, or everything as added for a root commit. Renames detected. */
 export async function changedFiles(cwd: string, hash: string): Promise<ChangedFile[]> {
-  // Trust boundary: same check as commitDetails.
-  if (!/^[0-9a-f]{4,64}$/i.test(hash)) throw new Error(`Not a commit hash: ${hash}`);
-  const [parent] = (await git(cwd, ['show', '-s', '--format=%P', hash, '--'])).trim().split(' ').filter(Boolean);
+  // Trust boundary: firstParent rejects anything but a hex hash.
+  const parent = await firstParent(cwd, hash);
   const out = await git(cwd, [
     'diff-tree', '-r', '-M', '-z', '--raw', '--numstat', '--no-commit-id',
     ...(parent ? [parent, hash] : ['--root', hash]), '--',
@@ -114,4 +116,23 @@ export function parseDiffTree(out: string): ChangedFile[] {
     i += stat.endsWith('\t') ? 3 : 1;
   }
   return files;
+}
+
+/** First parent of a commit, or undefined for a root commit. `hash` must be a hex object name. */
+export async function firstParent(cwd: string, hash: string): Promise<string | undefined> {
+  // Trust boundary: hashes come from the webview; refuse anything git could read as an option or rev expression.
+  if (!/^[0-9a-f]{4,64}$/i.test(hash)) throw new Error(`Not a commit hash: ${hash}`);
+  return (await git(cwd, ['show', '-s', '--format=%P', hash, '--'])).trim().split(' ').filter(Boolean)[0];
+}
+
+/** Content of `path` at commit `rev` (`git show <rev>:<path>`), or '' when the path doesn't exist there. */
+export async function fileAtRevision(cwd: string, rev: string, path: string): Promise<string> {
+  if (!/^[0-9a-f]{4,64}$/i.test(rev)) throw new Error(`Not a commit hash: ${rev}`);
+  try {
+    // LC_ALL=C: the stderr match below needs git's untranslated messages.
+    return await git(cwd, ['show', `${rev}:${path}`], { LC_ALL: 'C' });
+  } catch (err) {
+    if (/does not exist in|exists on disk, but not in/.test((err as { stderr?: string }).stderr ?? '')) return '';
+    throw err;
+  }
 }

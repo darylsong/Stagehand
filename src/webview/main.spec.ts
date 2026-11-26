@@ -147,3 +147,48 @@ test('the selected commit lists its changed files with status letters, rename ar
   await expect(p.locator('.details .binary')).toHaveCount(1);
   await p.screenshot({ path: 'test-results/screenshots/006-files.png' });
 });
+
+test('click opens a preview diff, double click pins it, Enter opens the focused file, binary opens nothing', async ({ page: p }) => {
+  await p.setViewportSize({ width: 900, height: 300 });
+  await p.addInitScript(() => {
+    const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
+    w.posted = [];
+    w.acquireVsCodeApi = () => ({ postMessage: (m: unknown) => w.posted.push(m) });
+  });
+  await p.goto(page);
+  await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, commits: c }, '*'), commits);
+  await p.locator('.row').nth(1).click();
+  const hash = commits[1]!.hash;
+  const files: ChangedFile[] = [
+    { status: 'M', path: 'README.md', binary: false },
+    { status: 'R', oldPath: 'src/before.ts', path: 'src/after.ts', binary: false },
+    { status: 'A', path: 'assets/logo.png', binary: true },
+  ];
+  await p.evaluate(([h, f]) => window.postMessage({ type: 'changedFiles', hash: h, files: f }, '*'), [hash, files] as const);
+  const rows = p.locator('.details .file');
+  await expect(rows).toHaveCount(3);
+  const clear = () => p.evaluate(() => { (window as unknown as { posted: unknown[] }).posted = []; });
+  const posted = () => p.evaluate(() => (window as unknown as { posted: unknown[] }).posted);
+
+  await clear();
+  await rows.nth(0).click();
+  expect(await posted()).toEqual([{ type: 'openDiff', hash, file: files[0], preview: true }]);
+
+  await clear();
+  await rows.nth(1).dblclick();
+  expect((await posted()).at(-1)).toEqual({ type: 'openDiff', hash, file: files[1], preview: false });
+
+  await clear();
+  await rows.nth(1).focus();
+  await p.keyboard.press('Enter');
+  expect(await posted()).toEqual([{ type: 'openDiff', hash, file: files[1], preview: true }]);
+
+  await clear();
+  await rows.nth(2).click();
+  await rows.nth(2).dblclick();
+  await rows.nth(2).focus();
+  await p.keyboard.press('Enter');
+  expect(await posted()).toEqual([]);
+  await expect(rows.nth(2).locator('.binary')).toHaveText('Binary file changed');
+  await p.screenshot({ path: 'test-results/screenshots/007-files.png' });
+});

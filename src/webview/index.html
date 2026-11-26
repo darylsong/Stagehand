@@ -25,7 +25,9 @@
     .hash-value, .parents-value { font-family: var(--vscode-editor-font-family, monospace); word-break: break-all; }
     .copy { font: inherit; color: var(--vscode-button-foreground, #fff); background: var(--vscode-button-background, #0060c0); border: none; padding: 1px 8px; cursor: pointer; }
     .files { margin-top: 8px; border-top: 1px solid var(--vscode-panel-border, #ccc); padding-top: 4px; }
-    .file { display: flex; gap: 8px; line-height: 22px; white-space: nowrap; }
+    .file { display: flex; gap: 8px; line-height: 22px; white-space: nowrap; user-select: none; }
+    .file:hover { background: var(--vscode-list-hoverBackground, #f0f0f0); cursor: pointer; }
+    .file:focus { outline: 1px solid var(--vscode-focusBorder, #0090f1); outline-offset: -1px; }
     .status { flex: none; width: 1.5ch; font-weight: bold; font-family: var(--vscode-editor-font-family, monospace); }
     .status-A { color: var(--vscode-gitDecoration-addedResourceForeground, #587c0c); }
     .status-M { color: var(--vscode-gitDecoration-modifiedResourceForeground, #895503); }

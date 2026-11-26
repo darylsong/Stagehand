@@ -6,6 +6,10 @@ import { join, resolve } from 'node:path';
 import type { ChangedFile, Commit, CommitDetails } from '../core/git';
 import { handleMessage, webviewHtml } from '../extension/extension';
 
+// Workspace repo (.vscode-test.mjs): "init" adds file.txt ("old"), "modify" changes it to "new".
+const commitNamed = async (subject: string) =>
+  (await vscode.commands.executeCommand<Commit[]>('stagehand.history.loadCommits', { skip: 0, limit: 1000 })).find((c) => c.subject === subject)!;
+
 suite('stagehand.showCurrentBranch', () => {
   test('returns the branch of the workspace repo', async () => {
     // Workspace is a temp repo created in .vscode-test.mjs on branch "integration-branch".
@@ -19,13 +23,13 @@ suite('stagehand.history', () => {
     await vscode.commands.executeCommand('stagehand.history.focus');
   });
 
-  test('loadCommits returns the init commit', async () => {
+  test('loadCommits returns the workspace commits newest first', async () => {
     const commits = await vscode.commands.executeCommand<Commit[]>('stagehand.history.loadCommits', { skip: 0, limit: 1000 });
-    assert.deepStrictEqual(commits.map((c) => c.subject), ['init']);
+    assert.deepStrictEqual(commits.map((c) => c.subject), ['modify', 'init']);
   });
 
   test('commitDetails returns the init commit with its full message', async () => {
-    const [init] = await vscode.commands.executeCommand<Commit[]>('stagehand.history.loadCommits', { skip: 0, limit: 1 });
+    const init = await commitNamed('init');
     const details = await vscode.commands.executeCommand<CommitDetails>('stagehand.history.commitDetails', init!.hash);
     assert.strictEqual(details.subject, 'init');
     assert.strictEqual(details.message, 'init');
@@ -33,10 +37,58 @@ suite('stagehand.history', () => {
     assert.strictEqual(details.authorEmail, 't@t');
   });
 
-  test('changedFiles returns an empty list for the empty init commit', async () => {
-    const [init] = await vscode.commands.executeCommand<Commit[]>('stagehand.history.loadCommits', { skip: 0, limit: 1 });
+  test('changedFiles returns the file the init commit added', async () => {
+    const init = await commitNamed('init');
     const files = await vscode.commands.executeCommand<ChangedFile[]>('stagehand.history.changedFiles', init!.hash);
-    assert.deepStrictEqual(files, []);
+    assert.deepStrictEqual(files, [{ status: 'A', path: 'file.txt', binary: false }]);
+  });
+
+  const activeDiff = () => {
+    const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
+    assert.ok(tab?.input instanceof vscode.TabInputTextDiff, 'active tab is a diff');
+    return { tab, input: tab.input };
+  };
+  const text = async (uri: vscode.Uri) => (await vscode.workspace.openTextDocument(uri)).getText();
+
+  test('openDiff shows parent and commit content of a modified file in a preview diff tab', async () => {
+    const modify = await commitNamed('modify');
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    await vscode.commands.executeCommand('stagehand.history.openDiff', modify.hash, { status: 'M', path: 'file.txt', binary: false });
+    const { tab, input } = activeDiff();
+    assert.strictEqual(input.original.scheme, 'stagehand');
+    assert.strictEqual(await text(input.original), 'old\n');
+    assert.strictEqual(await text(input.modified), 'new\n');
+    assert.strictEqual(tab.label, `file.txt (${modify.hash.slice(0, 8)})`);
+    assert.strictEqual(tab.isPreview, true);
+  });
+
+  test('openDiff with preview false pins the tab; an added file has an empty left side', async () => {
+    const init = await commitNamed('init');
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    await vscode.commands.executeCommand('stagehand.history.openDiff', init.hash, { status: 'A', path: 'file.txt', binary: false }, false);
+    const { tab, input } = activeDiff();
+    assert.strictEqual(await text(input.original), '');
+    assert.strictEqual(await text(input.modified), 'old\n');
+    assert.strictEqual(tab.isPreview, false);
+  });
+
+  test('openDiff puts a rename\'s old path on the left and the new path on the right; a missing side is empty', async () => {
+    // Synthetic rename on "modify": file.txt (exists in the parent) -> gone.txt (exists nowhere, so the right is empty).
+    const modify = await commitNamed('modify');
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    await vscode.commands.executeCommand('stagehand.history.openDiff', modify.hash, { status: 'R', oldPath: 'file.txt', path: 'gone.txt', binary: false });
+    const { input } = activeDiff();
+    assert.strictEqual(input.original.path, '/file.txt');
+    assert.strictEqual(input.modified.path, '/gone.txt');
+    assert.strictEqual(await text(input.original), 'old\n');
+    assert.strictEqual(await text(input.modified), '');
+  });
+
+  test('openDiff opens nothing for a binary file', async () => {
+    const modify = await commitNamed('modify');
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    await vscode.commands.executeCommand('stagehand.history.openDiff', modify.hash, { status: 'M', path: 'file.txt', binary: true });
+    assert.strictEqual(vscode.window.tabGroups.activeTabGroup.activeTab, undefined);
   });
 });
 
@@ -48,7 +100,7 @@ suite('webview message handling', () => {
     const reply = replies[0] as { type: string; skip: number; commits: Commit[] };
     assert.strictEqual(reply.type, 'commits');
     assert.strictEqual(reply.skip, 0);
-    assert.deepStrictEqual(reply.commits.map((c) => c.subject), ['init']);
+    assert.deepStrictEqual(reply.commits.map((c) => c.subject), ['modify', 'init']);
   });
 
   test('a failure replies with an error message', async () => {
@@ -60,7 +112,7 @@ suite('webview message handling', () => {
   });
 
   test('commitDetails replies with the details from the command', async () => {
-    const [init] = await vscode.commands.executeCommand<Commit[]>('stagehand.history.loadCommits', { skip: 0, limit: 1 });
+    const init = await commitNamed('init');
     const replies: unknown[] = [];
     await handleMessage({ type: 'commitDetails', hash: init!.hash }, (r) => replies.push(r));
     assert.strictEqual(replies.length, 1);
@@ -82,11 +134,28 @@ suite('webview message handling', () => {
     assert.deepStrictEqual(replies, [{ type: 'changedFiles', hash: 'abc123', files }]);
   });
 
-  test('changedFiles through the real command replies with an empty list for init', async () => {
-    const [init] = await vscode.commands.executeCommand<Commit[]>('stagehand.history.loadCommits', { skip: 0, limit: 1 });
+  test('changedFiles through the real command replies with the files of init', async () => {
+    const init = await commitNamed('init');
     const replies: unknown[] = [];
     await handleMessage({ type: 'changedFiles', hash: init!.hash }, (r) => replies.push(r));
-    assert.deepStrictEqual(replies, [{ type: 'changedFiles', hash: init!.hash, files: [] }]);
+    assert.deepStrictEqual(replies, [{ type: 'changedFiles', hash: init!.hash, files: [{ status: 'A', path: 'file.txt', binary: false }] }]);
+  });
+
+  test('openDiff runs the command with hash, file and preview, and posts no reply', async () => {
+    const calls: unknown[][] = [];
+    const file = { status: 'M', path: 'a.txt', binary: false };
+    await handleMessage({ type: 'openDiff', hash: 'abc123', file, preview: false }, () => assert.fail('no reply'), async (...args) => {
+      calls.push(args);
+    });
+    assert.deepStrictEqual(calls, [['stagehand.history.openDiff', 'abc123', file, false]]);
+  });
+
+  test('openDiff through the real command opens the diff tab', async () => {
+    const modify = await commitNamed('modify');
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    const file = { status: 'M', path: 'file.txt', binary: false };
+    await handleMessage({ type: 'openDiff', hash: modify.hash, file, preview: true }, () => assert.fail('no reply'));
+    assert.ok(vscode.window.tabGroups.activeTabGroup.activeTab?.input instanceof vscode.TabInputTextDiff);
   });
 
   test('copy writes the text to the clipboard', async () => {

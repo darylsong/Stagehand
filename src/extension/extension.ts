@@ -1,7 +1,9 @@
 import * as vscode from 'vscode';
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { changedFiles, commitDetails, currentBranch, listCommits } from '../core/git';
+import { basename, join } from 'node:path';
+import {
+  changedFiles, commitDetails, currentBranch, fileAtRevision, firstParent, listCommits, type ChangedFile,
+} from '../core/git';
 
 function repoDir(): string {
   const folder = vscode.workspace.workspaceFolders?.[0];
@@ -13,7 +15,22 @@ function repoDir(): string {
 type Run = (command: string, ...args: unknown[]) => Thenable<unknown>;
 const runCommand: Run = (command, ...args) => vscode.commands.executeCommand(command, ...args);
 
-type WebviewMessage = { type: string; skip?: number; limit?: number; hash?: string; text?: string };
+type WebviewMessage = {
+  type: string; skip?: number; limit?: number; hash?: string; text?: string; file?: ChangedFile; preview?: boolean;
+};
+
+/** `stagehand:/<path>?<rev>`; an empty rev means the file doesn't exist on that side. */
+const revUri = (rev: string | undefined, path: string) => vscode.Uri.from({ scheme: 'stagehand', path: `/${path}`, query: rev ?? '' });
+
+/** Opens the parent→commit diff of one changed file. Binary files open nothing. */
+export async function openDiff(hash: string, file: ChangedFile, preview = true): Promise<void> {
+  if (file.binary) return;
+  const parent = await firstParent(repoDir(), hash);
+  // Added/deleted files: fileAtRevision returns '' for the side where the path doesn't exist.
+  const left = revUri(parent, file.oldPath ?? file.path);
+  const right = revUri(hash, file.path);
+  await vscode.commands.executeCommand('vscode.diff', left, right, `${basename(file.path)} (${hash.slice(0, 8)})`, { preview });
+}
 
 /** Handles one message from the webview; `post` sends the reply. */
 export async function handleMessage(
@@ -30,6 +47,8 @@ export async function handleMessage(
       post({ type: 'details', details: await run('stagehand.history.commitDetails', msg.hash) });
     } else if (msg.type === 'changedFiles') {
       post({ type: 'changedFiles', hash: msg.hash, files: await run('stagehand.history.changedFiles', msg.hash) });
+    } else if (msg.type === 'openDiff') {
+      await run('stagehand.history.openDiff', msg.hash, msg.file, msg.preview);
     } else if (msg.type === 'copy') {
       await vscode.env.clipboard.writeText(String(msg.text ?? ''));
     }
@@ -60,6 +79,10 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand('stagehand.history.commitDetails', (hash: string) => commitDetails(repoDir(), hash)),
     vscode.commands.registerCommand('stagehand.history.changedFiles', (hash: string) => changedFiles(repoDir(), hash)),
+    vscode.commands.registerCommand('stagehand.history.openDiff', openDiff),
+    vscode.workspace.registerTextDocumentContentProvider('stagehand', {
+      provideTextDocumentContent: (uri) => (uri.query ? fileAtRevision(repoDir(), uri.query, uri.path.slice(1)) : ''),
+    }),
     vscode.window.registerWebviewViewProvider('stagehand.history', {
       resolveWebviewView(view) {
         const { webview } = view;
