@@ -1,0 +1,42 @@
+{
+  "name": "stagehand",
+  "displayName": "Stagehand",
+  "description": "Git history viewer inspired by JetBrains Rider's git log",
+  "version": "0.0.1",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "main": "./out/extension/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "stagehand.showCurrentBranch",
+        "title": "Stagehand: Show Current Branch"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "build:webview": "esbuild src/webview/main.ts --bundle --format=iife --outdir=out/webview && cp src/webview/index.html out/webview/",
+    "lint": "eslint src",
+    "typecheck": "tsc -p . --noEmit && tsc -p src/webview --noEmit",
+    "test:unit": "vitest run --dir src/core",
+    "test:webview": "npm run build:webview && playwright test",
+    "test:integration": "npm run compile && vscode-test",
+    "verify": "npm run typecheck && npm run lint && npm run test:unit && npm run test:webview && npm run test:integration"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.1",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^26.6.11",
+    "@types/vscode": "~1.90.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.1.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.15.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.74.0",
+    "vitest": "^5.1.2"
+  }
+}
