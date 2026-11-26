@@ -52,7 +52,9 @@ export async function handleMessage(
     } else if (msg.type === 'commitDetails') {
       post({ type: 'details', details: await run('stagehand.history.commitDetails', msg.hash) });
     } else if (msg.type === 'changedFiles') {
-      post({ type: 'changedFiles', hash: msg.hash, files: await run('stagehand.history.changedFiles', msg.hash) });
+      // A hash list returns combinedChanges' { files, gap, error? }; a single hash returns the files.
+      const result = await run('stagehand.history.changedFiles', msg.hash);
+      post({ type: 'changedFiles', hash: msg.hash, ...(Array.isArray(result) ? { files: result } : (result as object)) });
     } else if (msg.type === 'openDiff') {
       await run('stagehand.history.openDiff', msg.hash, msg.file, msg.preview);
     } else if (msg.type === 'copy') {

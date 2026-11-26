@@ -170,16 +170,22 @@ const hex = (h: string) => {
  * Per file: base = first parent of the oldest selected commit that touched it, target = the newest one that did.
  * Files that don't exist at either end (added then deleted inside the selection) are omitted.
  */
-export async function combinedChanges(cwd: string, hashes: string[]): Promise<ChangedFile[]> {
+/** combinedChanges' result: `gap` = unselected commits in between; `error` = why they can't be combined (files is then []). */
+export type Combined = { files: ChangedFile[]; gap: number; error?: string };
+
+export const DIFFERENT_BRANCHES = "Selected commits are on different branches; can't combine";
+
+export async function combinedChanges(cwd: string, hashes: string[]): Promise<Combined> {
   hashes.forEach(hex);
   const tips = (await git(cwd, ['merge-base', '--independent', ...hashes])).trim().split('\n');
-  // ponytail: plain error for now; issue 010 turns this into the in-view banner.
-  if (tips.length !== 1) throw new Error("Selected commits are on different branches; can't combine");
+  if (tips.length !== 1) return { files: [], gap: 0, error: DIFFERENT_BRANCHES };
   const base = (await git(cwd, ['merge-base', '--octopus', ...hashes])).trim();
   const isSelected = (full: string) => hashes.some((h) => full.startsWith(h.toLowerCase()));
   // Newest first; children before parents. `^base` bounds the walk; base itself is added back if selected.
   const lines = (await git(cwd, ['rev-list', '--topo-order', '--parents', tips[0]!, `^${base}`, '--'])).trim().split('\n');
-  const ordered = lines.filter(Boolean).map((l) => l.split(' ')).filter(([h]) => isSelected(h!));
+  const walked = lines.filter(Boolean).map((l) => l.split(' '));
+  const ordered = walked.filter(([h]) => isSelected(h!));
+  const gap = walked.length - ordered.length; // commits between base and tip that weren't selected
   if (isSelected(base)) ordered.push([base, ...(await git(cwd, ['show', '-s', '--format=%P', base, '--'])).trim().split(' ')]);
 
   const byPath = new Map<string, { first: string; firstStatus: string; firstParent?: string; last: string; lastStatus: string; binary: boolean; touches: number }>();
@@ -203,7 +209,7 @@ export async function combinedChanges(cwd: string, hashes: string[]): Promise<Ch
     const status = !before ? 'A' : !after ? 'D' : e.touches === 1 ? e.firstStatus : 'M';
     files.push({ status, path, binary: e.binary, ...(e.firstParent && { base: e.firstParent }), target: e.last });
   }
-  return files;
+  return { files, gap };
 }
 
 /** First parent of a commit, or undefined for a root commit. `hash` must be a hex object name. */

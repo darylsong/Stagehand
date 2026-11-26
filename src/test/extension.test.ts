@@ -46,9 +46,9 @@ suite('stagehand.history', () => {
 
   test('changedFiles with two hashes returns the combined list', async () => {
     const [init, modify] = [await commitNamed('init'), await commitNamed('modify')];
-    const files = await vscode.commands.executeCommand<ChangedFile[]>('stagehand.history.changedFiles', [modify.hash, init.hash]);
+    const result = await vscode.commands.executeCommand('stagehand.history.changedFiles', [modify.hash, init.hash]);
     // init added file.txt and modify changed it: added overall, from nothing (init is a root) to modify.
-    assert.deepStrictEqual(files, [{ status: 'A', path: 'file.txt', binary: false, target: modify.hash }]);
+    assert.deepStrictEqual(result, { files: [{ status: 'A', path: 'file.txt', binary: false, target: modify.hash }], gap: 0 });
   });
 
   const activeDiff = () => {
@@ -198,7 +198,14 @@ suite('webview message handling', () => {
     const replies: unknown[] = [];
     const hashes = [modify.hash, init.hash];
     await handleMessage({ type: 'changedFiles', hash: hashes }, (r) => replies.push(r));
-    assert.deepStrictEqual(replies, [{ type: 'changedFiles', hash: hashes, files: [{ status: 'A', path: 'file.txt', binary: false, target: modify.hash }] }]);
+    assert.deepStrictEqual(replies, [{ type: 'changedFiles', hash: hashes, files: [{ status: 'A', path: 'file.txt', binary: false, target: modify.hash }], gap: 0 }]);
+  });
+
+  test('changedFiles with a list of hashes passes the gap and the different-branches error through to the webview', async () => {
+    const replies: unknown[] = [];
+    const results = [{ files: [], gap: 3 }, { files: [], gap: 0, error: "Selected commits are on different branches; can't combine" }];
+    for (const result of results) await handleMessage({ type: 'changedFiles', hash: ['a1', 'b2'] }, (r) => replies.push(r), async () => result);
+    assert.deepStrictEqual(replies, results.map((r) => ({ type: 'changedFiles', hash: ['a1', 'b2'], ...r })));
   });
 
   test('openDiff runs the command with hash, file and preview, and posts no reply', async () => {

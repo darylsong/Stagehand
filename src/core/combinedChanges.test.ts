@@ -20,15 +20,15 @@ it('combines B and C of A→B→C→D: union of files, base = first parent of th
     { status: 'M', path: 'onlyC.txt', binary: false, base: b, target: c },
     // temp.txt: added in B, deleted in C -> omitted.
   ];
-  expect(await combinedChanges(repo.dir, [c, b])).toEqual(expected);
-  expect(await combinedChanges(repo.dir, [b, c])).toEqual(expected); // order of the selection doesn't matter
+  expect(await combinedChanges(repo.dir, [c, b])).toEqual({ files: expected, gap: 0 });
+  expect(await combinedChanges(repo.dir, [b, c])).toEqual({ files: expected, gap: 0 }); // order of the selection doesn't matter
 });
 
 it('a root commit in the selection gives an added file with no base', async () => {
   repo = await createTestRepo();
   const a = await repo.commit('A', { files: { 'f.txt': '1\n' } });
   const b = await repo.commit('B', { files: { 'f.txt': '2\n' } });
-  expect(await combinedChanges(repo.dir, [b.slice(0, 8), a])).toEqual([{ status: 'A', path: 'f.txt', binary: false, target: b }]);
+  expect(await combinedChanges(repo.dir, [b.slice(0, 8), a])).toEqual({ files: [{ status: 'A', path: 'f.txt', binary: false, target: b }], gap: 0 });
 });
 
 it('refuses commits on different branches and non-hex input', async () => {
@@ -38,6 +38,17 @@ it('refuses commits on different branches and non-hex input', async () => {
   const f = await repo.commit('F', { files: { 'f.txt': 'f\n' } });
   await repo.git('checkout', '-q', 'main');
   const m = await repo.commit('M', { files: { 'm.txt': 'm\n' } });
-  await expect(combinedChanges(repo.dir, [f, m])).rejects.toThrow("can't combine");
+  expect(await combinedChanges(repo.dir, [f, m])).toEqual({ files: [], gap: 0, error: "Selected commits are on different branches; can't combine" });
   await expect(combinedChanges(repo.dir, [m, 'HEAD~1'])).rejects.toThrow('Not a commit hash');
+});
+
+it('selecting A and D of A→B→C→D reports the 2 skipped commits in between', async () => {
+  repo = await createTestRepo();
+  const a = await repo.commit('A', { files: { 'f.txt': '1\n' } });
+  await repo.commit('B', { files: { 'f.txt': '2\n' } });
+  await repo.commit('C', { files: { 'f.txt': '3\n' } });
+  const d = await repo.commit('D', { files: { 'f.txt': '4\n' } });
+  const r = await combinedChanges(repo.dir, [d, a]);
+  expect(r.gap).toBe(2);
+  expect(r.error).toBeUndefined();
 });

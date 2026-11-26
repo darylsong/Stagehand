@@ -3,7 +3,7 @@ import type { ChangedFile, Commit, CommitDetails, ErrorKind } from '../core/git'
 export type Message =
   | { type: 'commits'; skip: number; commits: Commit[] }
   | { type: 'details'; details: CommitDetails }
-  | { type: 'changedFiles'; hash: string | string[]; files: ChangedFile[] }
+  | { type: 'changedFiles'; hash: string | string[]; files: ChangedFile[]; gap?: number; error?: string }
   | { type: 'error'; kind: ErrorKind; message: string };
 
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
@@ -115,8 +115,15 @@ function field(label: string, value: string): HTMLElement {
   return el;
 }
 
-function renderFiles(el: HTMLElement, hash: string | string[], files: ChangedFile[]): void {
-  el.replaceChildren(...files.map((f) => {
+/** The banner above a combined list: the different-branches error, or the skipped-commits warning. */
+function banner(gap = 0, error?: string): HTMLElement[] {
+  if (error) return [cell('banner banner-error', error)];
+  if (gap) return [cell('banner banner-gap', `Selection isn't contiguous: changes from ${gap} commits in between are included.`)];
+  return [];
+}
+
+function renderFiles(el: HTMLElement, hash: string | string[], files: ChangedFile[], gap?: number, error?: string): void {
+  el.replaceChildren(...banner(gap, error), ...files.map((f) => {
     const row = document.createElement('div');
     row.className = 'file';
     row.tabIndex = 0;
@@ -164,7 +171,7 @@ export function render(root: HTMLElement, msg: Message): void {
   }
   if (msg.type === 'changedFiles') {
     const el = root.querySelector<HTMLElement>('.files');
-    if (el && JSON.stringify(msg.hash) === filesKey) renderFiles(el, msg.hash, msg.files);
+    if (el && JSON.stringify(msg.hash) === filesKey) renderFiles(el, msg.hash, msg.files, msg.gap, msg.error);
     return;
   }
   if (msg.type === 'details') {

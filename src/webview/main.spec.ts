@@ -255,6 +255,35 @@ test('Ctrl-click toggles, Shift-click selects a range, Shift+Down extends; the p
   expect(await posted()).toEqual([{ type: 'commitDetails', hash: h(2)[0] }, { type: 'changedFiles', hash: h(2)[0] }]);
 });
 
+test('combined results show the non-contiguous banner, the different-branches banner, and no banner for a gap of 0', async ({ page: p }) => {
+  await p.setViewportSize({ width: 900, height: 400 });
+  await p.goto(page);
+  await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, commits: c }, '*'), commits);
+  const rows = p.locator('.row');
+  await rows.nth(1).click();
+  await rows.nth(4).click({ modifiers: ['Control'] });
+  const hs = [commits[1]!.hash, commits[4]!.hash];
+  const files: ChangedFile[] = [{ status: 'M', path: 'README.md', binary: false, base: commits[5]!.hash, target: hs[0] }];
+  const reply = (extra: object) => p.evaluate((m) => window.postMessage(m, '*'), { type: 'changedFiles', hash: hs, files, ...extra });
+  const banner = p.locator('.details .files .banner');
+
+  await reply({ gap: 2 });
+  await expect(banner).toHaveText("Selection isn't contiguous: changes from 2 commits in between are included.");
+  await expect(p.locator('.details .file .path')).toHaveText(['README.md']);
+  await p.screenshot({ path: 'test-results/screenshots/010-gap-banner.png' });
+
+  await reply({ gap: 0 });
+  await expect(p.locator('.details .file .path')).toHaveText(['README.md']);
+  await expect(banner).toHaveCount(0);
+
+  await p.evaluate((m) => window.postMessage(m, '*'),
+    { type: 'changedFiles', hash: hs, files: [], gap: 0, error: "Selected commits are on different branches; can't combine" });
+  await expect(banner).toHaveText("Selected commits are on different branches; can't combine");
+  await expect(p.locator('.details .file')).toHaveCount(0);
+  await expect(p.locator('.row')).toHaveCount(25); // the list stays; only the pane shows the error
+  await p.screenshot({ path: 'test-results/screenshots/010-branches-banner.png' });
+});
+
 const states = [
   { kind: 'no-folder', message: 'No folder open' },
   { kind: 'not-repo', message: 'Not a git repository' },
