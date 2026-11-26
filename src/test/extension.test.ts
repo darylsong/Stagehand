@@ -39,6 +39,11 @@ suite('stagehand.history', () => {
     assert.strictEqual(details.authorEmail, 't@t');
   });
 
+  test('branchesContaining returns the branches that contain the init commit', async () => {
+    const init = await commitNamed('init');
+    assert.deepStrictEqual(await vscode.commands.executeCommand('stagehand.history.branchesContaining', init!.hash), ['integration-branch']);
+  });
+
   test('changedFiles returns the file the init commit added', async () => {
     const init = await commitNamed('init');
     const files = await vscode.commands.executeCommand<ChangedFile[]>('stagehand.history.changedFiles', init!.hash);
@@ -176,6 +181,13 @@ suite('webview message handling', () => {
     assert.strictEqual(reply.type, 'details');
     assert.strictEqual(reply.details.hash, init!.hash);
     assert.strictEqual(reply.details.message, 'init');
+  });
+
+  test('branchesContaining replies with the hash and the branches from the command', async () => {
+    const init = await commitNamed('init');
+    const replies: unknown[] = [];
+    await handleMessage({ type: 'branchesContaining', hash: init!.hash }, (r) => replies.push(r));
+    assert.deepStrictEqual(replies, [{ type: 'branches', hash: init!.hash, branches: ['integration-branch'] }]);
   });
 
   test('changedFiles replies with the hash and the files from the command', async () => {

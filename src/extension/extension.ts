@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import {
-  changedFiles, checkout as gitCheckout, checkoutTarget, smartCheckout, STASH_KEPT, type CheckoutRefused, combinedChanges, commitDetails, currentBranch, fileAtRevision, firstParent, gitError, listCommits, type ChangedFile, type ErrorKind,
+  branchesContaining, changedFiles, checkout as gitCheckout, checkoutTarget, smartCheckout, STASH_KEPT, type CheckoutRefused, combinedChanges, commitDetails, currentBranch, fileAtRevision, firstParent, gitError, listCommits, type ChangedFile, type ErrorKind,
 } from '../core/git';
 
 /** The first workspace folder's path; throws the 'no-folder' GitError when there is none. */
@@ -101,6 +101,8 @@ export async function handleMessage(
       post({ type: 'commits', skip, limit, commits });
     } else if (msg.type === 'commitDetails') {
       post({ type: 'details', details: await run('stagehand.history.commitDetails', msg.hash) });
+    } else if (msg.type === 'branchesContaining') {
+      post({ type: 'branches', hash: msg.hash, branches: await run('stagehand.history.branchesContaining', msg.hash) });
     } else if (msg.type === 'changedFiles') {
       // A hash list returns combinedChanges' { files, gap, error? }; a single hash returns the files.
       const result = await run('stagehand.history.changedFiles', msg.hash);
@@ -177,6 +179,7 @@ export function activate(context: vscode.ExtensionContext): void {
       listCommits(repoDir(), { skip, limit }),
     ),
     vscode.commands.registerCommand('stagehand.history.commitDetails', (hash: string) => commitDetails(repoDir(), hash)),
+    vscode.commands.registerCommand('stagehand.history.branchesContaining', (hash: string) => branchesContaining(repoDir(), hash)),
     vscode.commands.registerCommand('stagehand.history.changedFiles', (hash: string | string[]) =>
       Array.isArray(hash) ? combinedChanges(repoDir(), hash) : changedFiles(repoDir(), hash)),
     vscode.commands.registerCommand('stagehand.history.openDiff', openDiff),

@@ -4,6 +4,7 @@ export type Message =
   | { type: 'commits'; skip: number; limit?: number; commits: Commit[] }
   | { type: 'refresh' }
   | { type: 'details'; details: CommitDetails }
+  | { type: 'branches'; hash: string; branches: string[] }
   | { type: 'changedFiles'; hash: string | string[]; files: ChangedFile[]; gap?: number; error?: string }
   | { type: 'error'; kind: ErrorKind; message: string };
 
@@ -81,6 +82,8 @@ let selected = new Set<number>(); // indices into commits
 let anchor = -1; // where a Shift range starts
 let lead = -1; // the row Up/Down move from
 let filesKey = ''; // the changedFiles request whose reply we're waiting for
+let branches: { hash: string; names: string[] } | undefined; // the latest branchesContaining reply for the selected commit
+let showBranches = false; // the "In N branches" list is expanded
 let loading = true; // the first page is requested on load
 let done = false; // a short page came back: no more commits
 
@@ -155,6 +158,7 @@ function showSelection(): void {
   if (hashes.length === 1) {
     post({ type: 'commitDetails', hash: hashes[0] });
     post({ type: 'changedFiles', hash: hashes[0] });
+    post({ type: 'branchesContaining', hash: hashes[0] });
     return;
   }
   info.replaceChildren(...(hashes.length ? [cell('selection-count', `${hashes.length} commits selected`)] : []));
@@ -221,10 +225,43 @@ function renderFiles(el: HTMLElement, hash: string | string[], files: ChangedFil
   }));
 }
 
+/** "In N branches" plus a Hide/Show toggle for the names; empty until the reply for the shown commit arrives. */
+function renderBranches(el: HTMLElement, hash: string): void {
+  if (branches?.hash !== hash) {
+    el.replaceChildren();
+    return;
+  }
+  const n = branches.names.length;
+  el.replaceChildren(cell('branch-count', `In ${n} ${n === 1 ? 'branch' : 'branches'}`));
+  if (!n) return;
+  const toggle = document.createElement('button');
+  toggle.className = 'branches-toggle';
+  toggle.textContent = showBranches ? 'Hide' : 'Show';
+  toggle.addEventListener('click', () => {
+    showBranches = !showBranches;
+    renderBranches(el, hash);
+  });
+  el.append(toggle);
+  if (showBranches) el.append(cell('branch-list', branches.names.join(', ')));
+}
+
 function renderDetails(pane: HTMLElement, d: CommitDetails): void {
-  const message = document.createElement('pre');
-  message.className = 'full-message';
-  message.textContent = d.message;
+  const cut = d.message.indexOf('\n\n');
+  const body = document.createElement('pre');
+  body.className = 'message-body';
+  body.textContent = cut < 0 ? '' : d.message.slice(cut + 2);
+  const date = new Date(d.authorDate);
+  const when = `${date.toLocaleDateString()} at ${date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
+  // Labels: the same icons as the row, each with its full name (the pane has room for all of them).
+  const refs = cell('detail-refs', '');
+  refs.append(...parseRefs(commits[[...selected][0]!]?.refs ?? []).map((r) => {
+    const label = cell('detail-ref', '');
+    label.append(refIcon(r.kind), cell('ref-name', r.name));
+    return label;
+  }));
+  const inBranches = document.createElement('div');
+  inBranches.className = 'in-branches';
+  renderBranches(inBranches, d.hash);
   const hash = field('Hash', d.hash);
   const copy = document.createElement('button');
   copy.className = 'copy';
@@ -233,11 +270,13 @@ function renderDetails(pane: HTMLElement, d: CommitDetails): void {
   copy.addEventListener('click', () => post({ type: 'copy', text: d.hash }));
   hash.append(copy);
   pane.replaceChildren(
-    message,
-    field('Author', `${d.authorName} <${d.authorEmail}>`),
-    field('Date', new Date(d.authorDate).toLocaleString()),
-    hash,
+    cell('message-subject', cut < 0 ? d.message : d.message.slice(0, cut)),
+    body,
+    cell('commit-line', `${d.hash.slice(0, 8)} ${d.authorName} <${d.authorEmail}> on ${when}`),
+    refs,
+    inBranches,
     field('Parents', d.parents.join(' ') || '(none)'),
+    hash,
   );
 }
 
@@ -256,6 +295,14 @@ export function render(root: HTMLElement, msg: Message): void {
     const pane = root.querySelector<HTMLElement>('.info');
     // Ignore late replies for a commit that is no longer selected.
     if (pane && msg.details.hash === selectedHash()) renderDetails(pane, msg.details);
+    return;
+  }
+  if (msg.type === 'branches') {
+    // Ignore late replies for a commit that is no longer selected.
+    if (msg.hash !== selectedHash()) return;
+    branches = { hash: msg.hash, names: msg.branches };
+    const el = root.querySelector<HTMLElement>('.in-branches');
+    if (el) renderBranches(el, msg.hash);
     return;
   }
   if (msg.type === 'refresh') {

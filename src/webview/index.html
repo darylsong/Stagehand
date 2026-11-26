@@ -44,7 +44,16 @@
     .ref-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; direction: rtl; color: var(--vscode-descriptionForeground, #717171); }
     .ref-name > span { direction: ltr; unicode-bidi: isolate; }
     .row.head .subject { font-weight: bold; }
-    .full-message { margin: 0 0 8px; white-space: pre-wrap; font-family: inherit; }
+    .message-subject { font-weight: bold; white-space: pre-wrap; }
+    .message-body { margin: 4px 0 8px; white-space: pre-wrap; font-family: inherit; }
+    .message-body:empty { display: none; }
+    .commit-line { margin: 8px 0 4px; color: var(--vscode-descriptionForeground, #717171); }
+    .detail-refs { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 2px 0; }
+    .detail-ref { display: inline-flex; gap: 4px; align-items: center; }
+    .detail-ref .ref-name { direction: ltr; }
+    .in-branches { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; line-height: 22px; }
+    .branches-toggle { font: inherit; color: var(--vscode-textLink-foreground, #006ab1); background: none; border: none; padding: 0; cursor: pointer; }
+    .branch-list { flex-basis: 100%; }
     .field { display: flex; gap: 8px; align-items: baseline; line-height: 22px; }
     .label { flex: none; width: 60px; color: var(--vscode-descriptionForeground, #717171); }
     .hash-value, .parents-value { font-family: var(--vscode-editor-font-family, monospace); word-break: break-all; }

@@ -41,6 +41,10 @@
         "title": "Stagehand: Commit Details"
       },
       {
+        "command": "stagehand.history.branchesContaining",
+        "title": "Stagehand: Branches Containing Commit"
+      },
+      {
         "command": "stagehand.history.changedFiles",
         "title": "Stagehand: Changed Files"
       },

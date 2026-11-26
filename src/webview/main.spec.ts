@@ -177,8 +177,10 @@ test('click selects a row, Down moves the selection, and the pane shows the post
   expect(await posted()).toEqual([
     { type: 'commitDetails', hash: commits[0]!.hash },
     { type: 'changedFiles', hash: commits[0]!.hash },
+    { type: 'branchesContaining', hash: commits[0]!.hash },
     { type: 'commitDetails', hash: commits[1]!.hash },
     { type: 'changedFiles', hash: commits[1]!.hash },
+    { type: 'branchesContaining', hash: commits[1]!.hash },
   ]);
 
   // A late reply for the previously selected commit is ignored.
@@ -190,11 +192,9 @@ test('click selects a row, Down moves the selection, and the pane shows the post
   await p.evaluate((d) => window.postMessage({ type: 'details', details: d }, '*'),
     details(commits[1]!, 'Commit number 1\n\nA body that spans\ntwo lines.'));
   const pane = p.locator('.details');
-  await expect(pane.locator('.full-message')).toHaveText('Commit number 1\n\nA body that spans\ntwo lines.');
-  await expect(pane.locator('.author-value')).toHaveText('Alice <alice@example.com>');
-  // Format in the browser, not in Node: their default locales can differ (they do on a non-en-US machine).
-  const date = await p.evaluate(() => new Date('2024-03-05T14:07:00Z').toLocaleString());
-  await expect(pane.locator('.date-value')).toHaveText(date);
+  await expect(pane.locator('.message-subject')).toHaveText('Commit number 1');
+  await expect(pane.locator('.message-body')).toHaveText('A body that spans\ntwo lines.');
+  await expect(pane.locator('.commit-line')).toContainText('Alice <alice@example.com> on ');
   await expect(pane.locator('.hash-value')).toHaveText(commits[1]!.hash);
   await expect(pane.locator('.parents-value')).toHaveText(`${commits[2]!.hash} ${commits[3]!.hash}`);
   await p.screenshot({ path: 'test-results/screenshots/005-details.png' });
@@ -212,6 +212,79 @@ test('click selects a row, Down moves the selection, and the pane shows the post
   await p.keyboard.press('ArrowUp');
   await expect(row(20)).toHaveClass(/selected/);
   await p.screenshot({ path: 'test-results/screenshots/005-scrolled.png' });
+});
+
+test.describe('details pane, en-US, UTC', () => {
+  test.use({ locale: 'en-US', timezoneId: 'UTC' });
+
+  test('Rider-style details: bold subject, body, hash/author/date line, labels, In N branches with Hide/Show, parents and Copy', async ({ page: p }) => {
+    await p.setViewportSize({ width: 1000, height: 400 });
+    await p.addInitScript(() => {
+      const w = window as unknown as { posted: unknown[]; acquireVsCodeApi: unknown };
+      w.posted = [];
+      w.acquireVsCodeApi = () => ({ postMessage: (m: unknown) => w.posted.push(m) });
+    });
+    await p.goto(page);
+    const labelled = commits.map((c, i) => (i === 1 ? { ...c, refs: ['HEAD -> refs/heads/main', 'refs/remotes/origin/main', 'tag: refs/tags/v1.0'] } : c));
+    await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, commits: c }, '*'), labelled);
+    const posted = () => p.evaluate(() => (window as unknown as { posted: { type: string }[] }).posted);
+    const send = (msg: unknown) => p.evaluate((m) => window.postMessage(m, '*'), msg);
+    const rows = p.locator('.row');
+    const pane = p.locator('.details .info');
+    const c1 = commits[1]!;
+
+    // Selecting a single commit asks for its branches automatically.
+    await rows.nth(0).click();
+    await rows.nth(1).click();
+    expect((await posted()).filter((m) => m.type === 'branchesContaining'))
+      .toEqual([{ type: 'branchesContaining', hash: commits[0]!.hash }, { type: 'branchesContaining', hash: c1.hash }]);
+    await send({ type: 'details', details: {
+      hash: c1.hash, parents: [commits[2]!.hash], subject: 'Commit number 1', authorName: 'Alice', authorEmail: 'alice@example.com',
+      authorDate: '2024-03-05T14:07:00Z', message: 'Commit number 1\n\nBody line one\nline two',
+    } });
+
+    await expect(pane.locator('.message-subject')).toHaveText('Commit number 1');
+    await expect(pane.locator('.message-subject')).toHaveCSS('font-weight', '700');
+    await expect(pane.locator('.message-body')).toHaveText('Body line one\nline two');
+    await expect(pane.locator('.commit-line')).toHaveText(/^01abcdef Alice <alice@example\.com> on 3\/5\/2024 at 2:07\sPM$/);
+
+    // Labels: the row's icons, one per ref, each with its name.
+    const refs = pane.locator('.detail-ref');
+    await expect(refs.locator('.ref-name')).toHaveText(['HEAD', 'main', 'origin/main', 'v1.0']);
+    await expect(refs.locator('svg')).toHaveClass(['ref ref-head', 'ref ref-local', 'ref ref-remote', 'ref ref-tag']);
+    const fill = (sel: string) => p.locator(sel).first().evaluate((e) => getComputedStyle(e).fill);
+    expect(await fill('.detail-ref .ref-remote path')).toBe(await fill('.row .ref-remote path'));
+
+    // A reply for the older selection is dropped; the current one shows the count, collapsed.
+    const branchesEl = pane.locator('.in-branches');
+    await send({ type: 'branches', hash: commits[0]!.hash, branches: ['stale'] });
+    await expect(branchesEl).toBeEmpty();
+    await send({ type: 'branches', hash: c1.hash, branches: ['main', 'origin/main', 'feature'] });
+    await expect(branchesEl.locator('.branch-count')).toHaveText('In 3 branches');
+    await expect(branchesEl.locator('.branches-toggle')).toHaveText('Show');
+    await expect(branchesEl.locator('.branch-list')).toHaveCount(0);
+    await branchesEl.locator('.branches-toggle').click();
+    await expect(branchesEl.locator('.branches-toggle')).toHaveText('Hide');
+    await expect(branchesEl.locator('.branch-list')).toHaveText('main, origin/main, feature');
+
+    // Parents and the full-hash Copy button are kept.
+    await expect(pane.locator('.parents-value')).toHaveText(commits[2]!.hash);
+    await expect(pane.locator('.hash-value')).toHaveText(c1.hash);
+    await p.screenshot({ path: 'test-results/screenshots/015-details.png' });
+    await pane.locator('button.copy').click();
+    expect((await posted()).at(-1)).toEqual({ type: 'copy', text: c1.hash });
+    await branchesEl.locator('.branches-toggle').click();
+    await expect(branchesEl.locator('.branch-list')).toHaveCount(0);
+    await expect(branchesEl.locator('.branches-toggle')).toHaveText('Show');
+
+    // The branches reply may beat the details reply; it still shows once the details arrive.
+    await rows.nth(2).click();
+    await send({ type: 'branches', hash: commits[2]!.hash, branches: ['main'] });
+    await send({ type: 'details', details: { ...commits[2]!, message: 'Commit number 2' } });
+    await expect(pane.locator('.in-branches .branch-count')).toHaveText('In 1 branch');
+    await expect(pane.locator('.message-body')).toHaveText('');
+    await expect(pane.locator('.detail-ref')).toHaveCount(0);
+  });
 });
 
 test('the selected commit lists its changed files with status letters, rename arrow and binary flag', async ({ page: p }) => {
@@ -348,7 +421,9 @@ test('Ctrl-click toggles, Shift-click selects a range, Shift+Down extends; the p
   await clear();
   await rows.nth(2).click();
   expect(await selectedIndices()).toEqual([2]);
-  expect(await posted()).toEqual([{ type: 'commitDetails', hash: h(2)[0] }, { type: 'changedFiles', hash: h(2)[0] }]);
+  expect(await posted()).toEqual([
+    { type: 'commitDetails', hash: h(2)[0] }, { type: 'changedFiles', hash: h(2)[0] }, { type: 'branchesContaining', hash: h(2)[0] },
+  ]);
 });
 
 test('combined results show the non-contiguous banner, the different-branches banner, and no banner for a gap of 0', async ({ page: p }) => {
@@ -519,7 +594,7 @@ test('a refresh keeps the selected commits that still exist and the pane on them
   const details = { ...commits[2]!, message: 'Commit number 2\n\nbody' };
   await p.evaluate((d) => window.postMessage({ type: 'details', details: d }, '*'), details);
   await p.evaluate((h) => window.postMessage({ type: 'changedFiles', hash: h, files: [{ status: 'M', path: 'a.txt', binary: false }] }, '*'), commits[2]!.hash);
-  await expect(p.locator('.details .full-message')).toHaveText('Commit number 2\n\nbody');
+  await expect(p.locator('.details .message-body')).toHaveText('body');
 
   // The refresh button and the extension's refresh message both reload the first page.
   await clearPosted();
@@ -534,7 +609,7 @@ test('a refresh keeps the selected commits that still exist and the pane on them
   await expect(p.locator('.row.selected')).toHaveCount(1);
   await expect(p.locator('.row.selected .subject')).toHaveText('Commit number 2');
   await expect(p.locator('.row[data-index="3"]')).toHaveClass(/selected/);
-  await expect(p.locator('.details .full-message')).toHaveText('Commit number 2\n\nbody');
+  await expect(p.locator('.details .message-body')).toHaveText('body');
   await expect(p.locator('.details .file .path')).toHaveText(['a.txt']);
   expect(await posted()).toEqual([]);
   await p.screenshot({ path: 'test-results/screenshots/008-refresh-kept.png' });
@@ -552,6 +627,7 @@ test('a refresh keeps the selected commits that still exist and the pane on them
   expect(await posted()).toEqual([
     { type: 'commitDetails', hash: commits[3]!.hash },
     { type: 'changedFiles', hash: commits[3]!.hash },
+    { type: 'branchesContaining', hash: commits[3]!.hash },
   ]);
 
   // A page without the selected commit clears the selection and the pane.

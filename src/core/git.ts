@@ -126,6 +126,17 @@ export interface ChangedFile {
   target?: string;
 }
 
+/** Local and remote-tracking branches that contain the commit (`git branch -a --contains`), short names; remotes' `HEAD` pointers dropped. */
+export async function branchesContaining(cwd: string, hash: string): Promise<string[]> {
+  if (!/^[0-9a-f]{4,64}$/i.test(hash)) throw new Error(`Not a commit hash: ${hash}`);
+  const out = await git(cwd, ['branch', '-a', '--contains', hash, '--format=%(refname)']);
+  return out.split('\n').flatMap((r) => {
+    if (r.startsWith('refs/heads/')) return [r.slice('refs/heads/'.length)];
+    if (r.startsWith('refs/remotes/') && !r.endsWith('/HEAD')) return [r.slice('refs/remotes/'.length)];
+    return []; // blank line, detached HEAD
+  });
+}
+
 /** Files a commit changed: against its first parent, or everything as added for a root commit. Renames detected. */
 export async function changedFiles(cwd: string, hash: string): Promise<ChangedFile[]> {
   // Trust boundary: firstParent rejects anything but a hex hash.
