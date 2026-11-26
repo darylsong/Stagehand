@@ -21,6 +21,12 @@
     .author { width: 140px; overflow: hidden; text-overflow: ellipsis; }
     .date { width: 110px; }
     .hash { flex: none; width: 8ch; font-family: var(--vscode-editor-font-family, monospace); }
+    .refs { flex: none; display: flex; gap: 4px; align-items: center; }
+    .ref { line-height: 16px; padding: 0 6px; border-radius: 8px; font-size: 0.9em; }
+    .ref-branch { color: var(--vscode-badge-foreground, #fff); background: var(--vscode-badge-background, #4d4d4d); }
+    .ref-tag { color: var(--vscode-gitDecoration-addedResourceForeground, #587c0c); border: 1px solid currentColor; line-height: 14px; }
+    .ref-head { color: var(--vscode-button-foreground, #fff); background: var(--vscode-gitDecoration-modifiedResourceForeground, #895503); font-weight: bold; }
+    .row.head .subject { font-weight: bold; }
     .full-message { margin: 0 0 8px; white-space: pre-wrap; font-family: inherit; }
     .field { display: flex; gap: 8px; align-items: baseline; line-height: 22px; }
     .label { flex: none; width: 60px; color: var(--vscode-descriptionForeground, #717171); }

@@ -29,6 +29,18 @@ function cell(cls: string, text: string): HTMLElement {
   return el;
 }
 
+/** Labels from git's decorations: `HEAD -> main` / bare `HEAD` (detached) mark HEAD, `tag: v1` is a tag, the rest are branches. */
+function labels(refs: string[]): HTMLElement {
+  const el = cell('refs', '');
+  el.append(...refs.flatMap((r) => {
+    if (r === 'HEAD') return [cell('ref ref-head', 'HEAD')];
+    if (r.startsWith('HEAD -> ')) return [cell('ref ref-head', 'HEAD'), cell('ref ref-branch', r.slice('HEAD -> '.length))];
+    if (r.startsWith('tag: ')) return [cell('ref ref-tag', r.slice('tag: '.length))];
+    return [cell('ref ref-branch', r)];
+  }));
+  return el;
+}
+
 export const ROW_HEIGHT = 22; // px; must match .row height in index.html
 export const PAGE = 1000;
 const OVERSCAN = 10; // rows rendered above and below the viewport
@@ -56,14 +68,15 @@ function renderRows(list: HTMLElement): void {
   for (let i = first; i < last; i++) {
     const c = commits[i]!;
     const row = document.createElement('div');
-    row.className = selected.has(i) ? 'row selected' : 'row';
+    const isHead = c.refs.some((r) => r === 'HEAD' || r.startsWith('HEAD -> '));
+    row.className = `row${selected.has(i) ? ' selected' : ''}${isHead ? ' head' : ''}`;
     row.dataset.index = String(i);
     row.style.top = `${i * ROW_HEIGHT}px`;
     row.title = c.hash;
     row.setAttribute('role', 'option');
     row.setAttribute('aria-selected', String(selected.has(i)));
     row.append(
-      cell('subject', c.subject), cell('author', c.authorName),
+      cell('subject', c.subject), labels(c.refs), cell('author', c.authorName),
       cell('date', relativeDate(c.authorDate)), cell('hash', c.hash.slice(0, 8)),
     );
     els.push(row);

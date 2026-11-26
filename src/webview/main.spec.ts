@@ -43,6 +43,36 @@ test('inside VS Code it asks for the first page once on load', async ({ page: p 
   await p.screenshot({ path: 'test-results/screenshots/013-list.png' });
 });
 
+test('rows show branch and tag labels, distinct, and mark the HEAD commit, attached or detached', async ({ page: p }) => {
+  const labelled = commits.slice(0, 4).map((c, i) => ({
+    ...c, refs: [['HEAD -> main', 'origin/main'], ['feature', 'tag: v1'], [], ['HEAD', 'tag: v0.9']][i]!,
+  }));
+  await p.goto(page);
+  await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, commits: c }, '*'), labelled);
+  const rows = p.locator('.row');
+  await expect(rows.nth(0).locator('.ref')).toHaveText(['HEAD', 'main', 'origin/main']);
+  await expect(rows.nth(0).locator('.ref-head')).toHaveText('HEAD');
+  await expect(rows.nth(0).locator('.ref-branch')).toHaveText(['main', 'origin/main']);
+  await expect(rows.nth(1).locator('.ref-branch')).toHaveText('feature');
+  await expect(rows.nth(1).locator('.ref-tag')).toHaveText('v1');
+  await expect(rows.nth(1).locator('.ref-head')).toHaveCount(0);
+  await expect(rows.nth(2).locator('.ref')).toHaveCount(0);
+  // Detached: bare HEAD.
+  await expect(rows.nth(3).locator('.ref-head')).toHaveText('HEAD');
+  await expect(rows.nth(3).locator('.ref-tag')).toHaveText('v0.9');
+  await expect(p.locator('.row.head')).toHaveCount(2);
+  await expect(rows.nth(0)).toHaveClass(/\bhead\b/);
+  await expect(rows.nth(3)).toHaveClass(/\bhead\b/);
+  // Branches and tags look different.
+  const look = (sel: string) => p.locator(sel).first().evaluate((e) => {
+    const s = getComputedStyle(e);
+    return [s.color, s.backgroundColor, s.borderTopStyle].join();
+  });
+  const [branch, tag, head] = [await look('.ref-branch'), await look('.ref-tag'), await look('.ref-head')];
+  expect(new Set([branch, tag, head]).size).toBe(3);
+  await p.screenshot({ path: 'test-results/screenshots/004-labels.png' });
+});
+
 test('the hash column has a fixed width and the standalone page has neutral colours', async ({ page: p }) => {
   await p.goto(page);
   await p.evaluate((c) => window.postMessage({ type: 'commits', skip: 0, commits: c }, '*'), commits);

@@ -121,6 +121,8 @@ suite('webview message handling', () => {
     assert.strictEqual(reply.type, 'commits');
     assert.strictEqual(reply.skip, 0);
     assert.deepStrictEqual(reply.commits.map((c) => c.subject), ['modify', 'init']);
+    // Labels and the HEAD marker reach the webview as refs.
+    assert.deepStrictEqual(reply.commits.map((c) => c.refs), [['HEAD -> integration-branch'], []]);
   });
 
   test('loadCommits with skip/limit replies with that page of the real log', async () => {

@@ -34,6 +34,25 @@ it('lists commits from HEAD and other local branches, newest first, with parents
   expect((await listCommits(repo.dir, { skip: 4, limit: 10 })).map((x) => x.hash)).toEqual([a]);
 });
 
+it('gives branch, tag and detached-HEAD refs on the right commits', async () => {
+  repo = await createTestRepo();
+  const a = await repo.commit('A');
+  await repo.git('tag', 'v1');
+  const b = await repo.commit('B');
+  await repo.git('checkout', '-q', '-b', 'feature');
+  const c = await repo.commit('C');
+  await repo.git('checkout', '-q', 'main');
+  await repo.git('checkout', '-q', '--detach', a);
+
+  const refs = Object.fromEntries((await listCommits(repo.dir)).map((x) => [x.hash, x.refs]));
+  expect(refs[a]).toEqual(['HEAD', 'tag: v1']); // bare `HEAD` = detached
+  expect(refs[b]).toEqual(['main']);
+  expect(refs[c]).toEqual(['feature']);
+
+  await repo.git('checkout', '-q', 'feature');
+  expect((await listCommits(repo.dir))[0]).toMatchObject({ hash: c, refs: ['HEAD -> feature'] });
+});
+
 describe('error kinds', () => {
   let dir: string | undefined;
   afterEach(async () => dir && rm(dir, { recursive: true, force: true }));
